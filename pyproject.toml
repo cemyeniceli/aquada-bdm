@@ -1,0 +1,14 @@
+[project]
+name = "aquada-bdm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas>=2.2",
+    "plotly>=5.22",
+    "psycopg[binary]>=3.2",
+    "scipy>=1.18.0",
+    "sqlalchemy>=2.0",
+    "streamlit>=1.36",
+]
