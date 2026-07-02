@@ -206,7 +206,7 @@ def render_expandable_damages_table(
     *,
     rows_per_page: int = 5,
 ) -> None:
-    """Render a compact paginated damage table with expandable detail cells."""
+    """Render a compact paginated damage table."""
     total_rows = len(damages_df)
     if total_rows == 0:
         st.info("No damages to show.")
@@ -258,111 +258,87 @@ def render_expandable_damages_table(
     st.markdown(
         """
         <style>
+            .damage-summary-header-row,
+            .damage-summary-row {
+                display: grid;
+                grid-template-columns: 0.8fr 0.8fr 1fr 1.3fr 1.3fr 1.2fr 1.2fr;
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
+            }
             .damage-summary-header {
                 font-weight: 600;
-                text-align: center;
-                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
-                padding: 0.35rem 0;
             }
-            .damage-summary-header.details {
-                text-align: left;
-            }
+            .damage-summary-header,
             .damage-summary-cell {
                 text-align: center;
-                padding: 0;
+                padding: 0.35rem 0;
                 min-height: 3.1rem;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 line-height: 1.4;
+                border-right: 1px solid rgba(49, 51, 63, 0.18);
             }
-            details[data-testid="stExpander"] {
-                margin: 1rem !important;
+            .damage-summary-header:first-child,
+            .damage-summary-cell:first-child {
+                border-left: 1px solid rgba(49, 51, 63, 0.18);
             }
-            details[data-testid="stExpander"] summary {
-                min-height: 3.1rem !important;
-                display: flex !important;
-                align-items: center !important;
+            .damage-summary-cell.severity-critical {
+                background-color: rgba(255, 99, 99, 0.22);
             }
-            .damage-row-border {
-                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
-                margin: 0.15rem 0 0.25rem 0;
+            .damage-summary-cell.severity-to-repair {
+                background-color: rgba(255, 214, 102, 0.28);
+            }
+            .damage-summary-cell.severity-cosmetic {
+                background-color: rgba(102, 187, 106, 0.22);
             }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    widths = [0.8, 0.8, 1, 1, 1.1, 1.5, 1.2, 3.0]
     headers = [
         "Damage ID",
         "Blade ID",
-        "Date",
         "Severity",
-        "Damage Type",
+        "Type",
         "Depth",
         "CS Position",
-        "Details",
+        "Radial Position [m]",
     ]
-    header_cols = st.columns(widths)
-    for index, (column, header) in enumerate(zip(header_cols, headers)):
-        css_class = (
-            "damage-summary-header details" if index == 7 else "damage-summary-header"
+    st.markdown(
+        "<div class='damage-summary-header-row'>"
+        + "".join(
+            f"<div class='damage-summary-header'>{html.escape(header)}</div>"
+            for header in headers
         )
-        column.markdown(
-            f"<div class='{css_class}'>{header}</div>",
-            unsafe_allow_html=True,
-        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
 
     for damage in page_df.to_dict("records"):
-        row_cols = st.columns(widths)
-        row_cols[0].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['damage_id'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[1].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['blade_id'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[2].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['inspection_date'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[3].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['severity'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[4].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['damage_type'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[5].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['depth'])}</div>",
-            unsafe_allow_html=True,
-        )
-        row_cols[6].markdown(
-            f"<div class='damage-summary-cell'>{text(damage['cs_position'])}</div>",
-            unsafe_allow_html=True,
-        )
-
-        with row_cols[7].expander(
-            f"Show details · {damage['damage_id']}",
-            expanded=False,
-        ):
-            st.write(
-                f"**Radial Position:** {number(damage['radial_position_m'], ' m')}"
+        severity_class = {
+            "Critical": "severity-critical",
+            "To repair": "severity-to-repair",
+            "Cosmetic": "severity-cosmetic",
+        }.get(str(damage["severity"]), "")
+        cells = [
+            (text(damage["damage_id"]), ""),
+            (text(damage["blade_id"]), ""),
+            (text(damage["severity"]), severity_class),
+            (text(damage["damage_type"]), ""),
+            (text(damage["depth"]), ""),
+            (text(damage["cs_position"]), ""),
+            (number(damage["radial_position_m"]), ""),
+        ]
+        st.markdown(
+            "<div class='damage-summary-row'>"
+            + "".join(
+                f"<div class='damage-summary-cell {css_class}'>{cell}</div>"
+                for cell, css_class in cells
             )
-            st.write(
-                f"**Radial Area Size:** {number(damage['radial_area_size_m'], ' m')}"
-            )
-            st.write(f"**Size:** {number(damage['size_m'], ' m')}")
-            st.write(f"**Density:** {number(damage['density_percent'], ' %')}")
-            st.write(f"**Orientation:** {number(damage['orientation'], ' %')}")
-            st.write(f"**Photo:** {damage['photo']}")
-            st.write(f"**Inspection Comment:** {damage['inspection_comment'] or ''}")
-            st.write(f"**Analyzer Comment:** {damage['analyzer_comment'] or ''}")
-
-        st.markdown("<div class='damage-row-border'></div>", unsafe_allow_html=True)
+            + "</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def selected_rows(event: Any) -> list[int]:
