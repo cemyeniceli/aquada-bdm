@@ -1090,11 +1090,11 @@ def show_turbines_page(session: Session) -> None:
         },
         custom_data=["wtg_id"],
         labels={
-            "coord_x": "Coord X",
-            "coord_y": "Coord Y",
+            "coord_x": "Coord X [m]",
+            "coord_y": "Coord Y [m]",
             "damage_count": "Damage count",
         },
-        title="Turbine locations sized by total blade damages",
+        title="Turbine locations by coordinates in X and Y<br>Point size indicates total damage count",
     )
     fig.update_traces(marker={"sizemin": 8, "line": {"width": 1, "color": "black"}})
     fig.update_layout(clickmode="event+select")
@@ -1106,26 +1106,10 @@ def show_turbines_page(session: Session) -> None:
         selection_mode="points",
         key="turbine_scatter",
     )
+    st.caption("*The XY coordinates are in projection UTM 32 Euref89.*")
 
     selected_wtg_id = selected_plot_wtg_id(plot_event, turbines_df)
     if selected_wtg_id is not None:
-        st.query_params.clear()
-        st.session_state.page = "damages"
-        st.session_state.wtg_id = selected_wtg_id
-        st.rerun()
-
-    st.caption("You can also select a turbine row below.")
-    table_event = st.dataframe(
-        turbines_df.drop(columns=["plot_size"]),
-        hide_index=True,
-        width="stretch",
-        on_select="rerun",
-        selection_mode="single-row",
-        key="turbines_table",
-    )
-    rows = selected_rows(table_event)
-    if rows:
-        selected_wtg_id = int(turbines_df.iloc[rows[0]]["wtg_id"])
         st.query_params.clear()
         st.session_state.page = "damages"
         st.session_state.wtg_id = selected_wtg_id
