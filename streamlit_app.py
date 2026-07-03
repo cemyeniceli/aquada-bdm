@@ -201,6 +201,124 @@ def damages_dataframe(session: Session, wtg_id: int) -> pd.DataFrame:
     )
 
 
+@st.dialog("Damage details", width="large")
+def damage_dialog(selected_damage: pd.Series) -> None:
+    info_column, photo_column = st.columns(
+        [0.4, 0.6], gap="small", vertical_alignment="top"
+    )
+
+    label_map = {
+        "damage_id": "Damage ID",
+        "blade_id": "Blade ID",
+        "inspection_date": "Inspection Date",
+        "inspector_name": "Inspector Name",
+        "severity": "Severity",
+        "damage_type": "Damage Type",
+        "depth": "Depth",
+        "cs_position": "CS Position",
+        "radial_position_m": "Radial Position [m]",
+        "radial_area_size_m": "Radial Area Size [m]",
+        "size_m": "Size [m]",
+        "density_percent": "Density [%]",
+        "orientation": "Orientation [deg]",
+        "inspection_comment": "Inspection Comment",
+        "analyzer_comment": "Analyzer Comment",
+    }
+    comment_fields = ["inspection_comment", "analyzer_comment"]
+    excluded_info_fields = {"photo", *comment_fields}
+    ordered_fields = [
+        field
+        for field in label_map
+        if field in selected_damage.index and field not in excluded_info_fields
+    ]
+    ordered_fields.extend(
+        field
+        for field in selected_damage.index
+        if field not in ordered_fields and field not in excluded_info_fields
+    )
+
+    dialog_style = """
+        <style>
+            .damage-dialog-info,
+            .damage-dialog-comments {
+                border: 1px solid rgba(49, 51, 63, 0.18);
+                border-radius: 0.35rem;
+                overflow: hidden;
+            }
+            .damage-dialog-field,
+            .damage-dialog-comment-field {
+                display: grid;
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
+            }
+            .damage-dialog-field {
+                grid-template-columns: minmax(7rem, 42%) 1fr;
+            }
+            .damage-dialog-comment-field {
+                grid-template-columns: minmax(5.5rem, 24%) 1fr;
+            }
+            .damage-dialog-field:last-child,
+            .damage-dialog-comment-field:last-child {
+                border-bottom: 0;
+            }
+            .damage-dialog-label,
+            .damage-dialog-value,
+            .damage-dialog-comment-label,
+            .damage-dialog-comment-value {
+                padding: 0.45rem 0.6rem;
+                overflow-wrap: anywhere;
+            }
+            .damage-dialog-label,
+            .damage-dialog-comment-label {
+                font-weight: 600;
+                background: rgba(49, 51, 63, 0.04);
+                border-right: 1px solid rgba(49, 51, 63, 0.18);
+                white-space: normal;
+            }
+            .damage-dialog-comment-value {
+                min-height: 5rem;
+                white-space: pre-wrap;
+            }
+        </style>
+    """
+
+    with info_column:
+        st.markdown("#### Damage information")
+        rows_html = "".join(
+            "<div class='damage-dialog-field'>"
+            f"<div class='damage-dialog-label'>{html.escape(label_map.get(field, field.replace('_', ' ').title()))}</div>"
+            f"<div class='damage-dialog-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"
+            "</div>"
+            for field in ordered_fields
+        )
+        st.markdown(
+            dialog_style + f"<div class='damage-dialog-info'>{rows_html}</div>",
+            unsafe_allow_html=True,
+        )
+
+    with photo_column:
+        st.markdown("#### Damage photo")
+        photo_path = str(selected_damage["photo"])
+        if photo_path and os.path.exists(photo_path):
+            st.image(photo_path, use_container_width=True)
+        else:
+            st.warning("No damage photo found.")
+
+        comments_html = "".join(
+            "<div class='damage-dialog-comment-field'>"
+            f"<div class='damage-dialog-comment-label'>{html.escape(label_map[field])}</div>"
+            f"<div class='damage-dialog-comment-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"
+            "</div>"
+            for field in comment_fields
+            if field in selected_damage.index
+        )
+        if comments_html:
+            st.markdown("#### Comments")
+            st.markdown(
+                f"<div class='damage-dialog-comments'>{comments_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+
 def render_damage_table(
     damages_df: pd.DataFrame,
     *,
@@ -1636,12 +1754,10 @@ def show_damages_page(session: Session) -> None:
         selected_damage_id = None
 
     if selected_damage_id is not None:
-
-        @st.dialog(f"Damage {selected_damage_id}")
-        def damage_dialog() -> None:
-            pass
-
-        damage_dialog()
+        selected_damage = filtered_damages_df.loc[
+            filtered_damages_df["damage_id"].astype(int) == selected_damage_id
+        ].iloc[0]
+        damage_dialog(selected_damage)
 
 
 def sync_navigation_from_query_params() -> None:
