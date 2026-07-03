@@ -201,16 +201,16 @@ def damages_dataframe(session: Session, wtg_id: int) -> pd.DataFrame:
     )
 
 
-def render_expandable_damages_table(
+def render_damage_table(
     damages_df: pd.DataFrame,
     *,
     rows_per_page: int = 5,
-) -> None:
+) -> int | None:
     """Render a compact paginated damage table."""
     total_rows = len(damages_df)
     if total_rows == 0:
         st.info("No damages to show.")
-        return
+        return None
 
     page_key = f"damage_summary_page_{st.session_state.get('wtg_id', 'unknown')}"
     total_pages = max(1, (total_rows + rows_per_page - 1) // rows_per_page)
@@ -264,17 +264,33 @@ def render_expandable_damages_table(
     st.markdown(
         """
         <style>
-            .damage-summary-header-row,
-            .damage-summary-row {
-                display: grid;
-                grid-template-columns: 0.8fr 0.8fr 1fr 1.3fr 1.3fr 1.2fr 1.2fr;
-                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
+            div[class*="st-key-damage_summary_header"] {
+                min-height: 3.1rem !important;
+                margin-bottom: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_header"] div[data-testid="stHorizontalBlock"] {
+                min-height: 3.1rem !important;
+                align-items: stretch !important;
+                gap: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_header"] div[data-testid="column"] {
+                min-height: 3.1rem !important;
+                display: flex !important;
+                align-items: stretch !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_header"] div[data-testid="stElementContainer"],
+            div[class*="st-key-damage_summary_header"] div[data-testid="stMarkdownContainer"] {
+                width: 100% !important;
+                min-height: 3.1rem !important;
+                margin: 0 !important;
+                padding: 0 !important;
             }
             .damage-summary-header {
                 font-weight: 600;
-            }
-            .damage-summary-header,
-            .damage-summary-cell {
                 text-align: center;
                 padding: 0.35rem 0;
                 min-height: 3.1rem;
@@ -283,10 +299,104 @@ def render_expandable_damages_table(
                 justify-content: center;
                 line-height: 1.4;
                 border-right: 1px solid rgba(49, 51, 63, 0.18);
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
+                box-sizing: border-box;
             }
-            .damage-summary-header:first-child,
-            .damage-summary-cell:first-child {
+            .damage-summary-cell {
+                min-height: 3.1rem;
+                width: 100%;
+                padding: 0.35rem 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                line-height: 1.4;
+                font-size: 1rem;
+                border-right: 1px solid rgba(49, 51, 63, 0.18);
+                box-sizing: border-box;
+            }
+            .damage-summary-header.first {
                 border-left: 1px solid rgba(49, 51, 63, 0.18);
+            }
+            div[class*="st-key-damage_summary_table_body"] div[data-testid="stVerticalBlock"] {
+                gap: 0 !important;
+                row-gap: 0 !important;
+            }
+            div[class*="st-key-damage_summary_table_body"] div[data-testid="stElementContainer"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_row_"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_row_"] div[data-testid="stHorizontalBlock"] {
+                gap: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_row_"] div[data-testid="column"] {
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_row_"] div[data-testid="stElementContainer"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_cell_"] {
+                min-height: 3.1rem !important;
+                height: 3.1rem !important;
+                display: flex !important;
+                align-items: center !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18) !important;
+                box-sizing: border-box !important;
+            }
+            div[class*="st-key-damage_summary_cell_"] > div,
+            div[class*="st-key-damage_summary_cell_"] div[data-testid="stElementContainer"] {
+                width: 100% !important;
+                margin: 0 !important;
+            }
+            div[class*="st-key-damage_summary_cell_id_"] {
+                border-left: 1px solid rgba(49, 51, 63, 0.18) !important;
+                border-right: 1px solid rgba(49, 51, 63, 0.18) !important;
+            }
+            div[class*="st-key-damage_summary_cell_id_"] div[data-testid="stButton"] {
+                min-height: 3.1rem !important;
+                height: 3.1rem !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_cell_id_"] button[kind="tertiary"] {
+                color: inherit !important;
+                text-decoration: none !important;
+                min-height: 0 !important;
+                height: auto !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                font-family: inherit !important;
+                font-size: 1rem !important;
+                font-weight: normal !important;
+                line-height: 1.4 !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }
+            div[class*="st-key-damage_summary_cell_id_"] button[kind="tertiary"] p {
+                color: inherit !important;
+                text-decoration: none !important;
+                font-family: inherit !important;
+                font-size: 1rem !important;
+                font-weight: normal !important;
+                line-height: 1.4 !important;
+                margin: 0 !important;
+            }
+            div[class*="st-key-damage_summary_cell_id_"] button[kind="tertiary"]:hover,
+            div[class*="st-key-damage_summary_cell_id_"] button[kind="tertiary"]:hover p {
+                color: inherit !important;
+                text-decoration: underline !important;
             }
             .damage-summary-cell.severity-critical {
                 background-color: rgba(255, 99, 99, 0.22);
@@ -294,22 +404,177 @@ def render_expandable_damages_table(
             .damage-summary-cell.severity-to-repair {
                 background-color: rgba(255, 214, 102, 0.28);
             }
-            .damage-summary-cell.severity-cosmetic {
+            .damage-summary-cell.severity-cosmetic,
+            .damage-mobile-value.severity-cosmetic {
                 background-color: rgba(102, 187, 106, 0.22);
             }
-            .damage-summary-link {
+            .damage-mobile-value.severity-critical {
+                background-color: rgba(255, 99, 99, 0.22);
+            }
+            .damage-mobile-value.severity-to-repair {
+                background-color: rgba(255, 214, 102, 0.28);
+            }
+            div[class*="st-key-damage_summary_mobile_table"] {
+                display: none !important;
+            }
+            .damage-mobile-fields {
+                width: 100%;
+                overflow: hidden;
+                margin-top: 0 !important;
+                border: 1px solid rgba(49, 51, 63, 0.18);
+                border-top: 0;
+                border-bottom: 0;
+                border-radius: 0;
+            }
+            .damage-mobile-field {
+                display: grid;
+                grid-template-columns: minmax(7rem, 42%) 1fr;
+                min-height: 2.4rem;
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18);
+            }
+            .damage-mobile-label,
+            .damage-mobile-value {
+                display: flex;
+                align-items: center;
+                padding: 0.45rem 0.6rem;
+                overflow-wrap: anywhere;
+            }
+            .damage-mobile-label,
+            .damage-mobile-id-label {
+                font-weight: 600;
+                background: rgba(49, 51, 63, 0.04);
+                border-right: 1px solid rgba(49, 51, 63, 0.18);
+            }
+            .damage-mobile-value {
+                justify-content: center;
+                text-align: center;
+            }
+            div[class*="st-key-damage_summary_mobile_card_"] div[data-testid="stVerticalBlock"] {
+                gap: 0 !important;
+                row-gap: 0 !important;
+            }
+            div[class*="st-key-damage_summary_mobile_card_"] {
+                margin-bottom: 1rem !important;
+                padding-bottom: 2rem !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] {
+                overflow: hidden !important;
+                min-height: 2.4rem !important;
+                height: 2.4rem !important;
+                margin-bottom: 0 !important;
+                padding: 0 !important;
+                border: 1px solid rgba(49, 51, 63, 0.18) !important;
+                border-bottom: 1px solid rgba(49, 51, 63, 0.18) !important;
+                border-radius: 0.35rem 0.35rem 0 0 !important;
+                box-sizing: border-box !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stHorizontalBlock"] {
+                min-height: 2.4rem !important;
+                height: 2.4rem !important;
+                width: 100% !important;
+                gap: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                display: flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                align-items: stretch !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stElementContainer"] {
+                min-width: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stElementContainer"]:has(.damage-mobile-id-label) {
+                flex: 0 0 max(7rem, 42%) !important;
+                width: max(7rem, 42%) !important;
+                max-width: max(7rem, 42%) !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stElementContainer"]:has(button[kind="tertiary"]) {
+                flex: 1 1 auto !important;
+                width: auto !important;
+                max-width: none !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stMarkdownContainer"] {
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stButton"] {
+                width: 100% !important;
+            }
+            .damage-mobile-id-label {
+                min-height: 2.4rem;
+                height: 2.4rem;
+                display: flex;
+                align-items: center;
+                min-width: 0;
+                padding: 0.45rem 0.6rem;
+                font-weight: 600;
+                background: rgba(49, 51, 63, 0.04);
+                border-right: 1px solid rgba(49, 51, 63, 0.18);
+                box-sizing: border-box;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] div[data-testid="stButton"] {
+                width: 100% !important;
+                min-height: 2.4rem !important;
+                height: 2.4rem !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] button[kind="tertiary"] {
+                width: 100% !important;
+                min-height: 2.4rem !important;
+                height: 2.4rem !important;
+                padding: 0.45rem 0.6rem !important;
+                margin: 0 !important;
                 color: inherit !important;
                 text-decoration: none !important;
+                font-family: inherit !important;
+                font-size: 1rem !important;
+                font-weight: normal !important;
+                line-height: 1.4 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                border-radius: 0 !important;
             }
-            .damage-summary-link:hover {
+            div[class*="st-key-damage_summary_mobile_id_row_"] button[kind="tertiary"] p {
+                color: inherit !important;
+                text-decoration: none !important;
+                font-family: inherit !important;
+                font-size: 1rem !important;
+                font-weight: normal !important;
+                line-height: 1.4 !important;
+                margin: 0 !important;
+            }
+            div[class*="st-key-damage_summary_mobile_id_row_"] button[kind="tertiary"]:hover,
+            div[class*="st-key-damage_summary_mobile_id_row_"] button[kind="tertiary"]:hover p {
                 color: inherit !important;
                 text-decoration: underline !important;
+            }
+
+            @media (max-width: 640px) {
+                div[class*="st-key-damage_summary_desktop_table"] {
+                    display: none !important;
+                }
+                div[class*="st-key-damage_summary_mobile_table"] {
+                    display: block !important;
+                }
+            }
+            @media (min-width: 641px) {
+                div[class*="st-key-damage_summary_desktop_table"] {
+                    display: block !important;
+                }
             }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+    widths = [0.8, 0.8, 1, 1.3, 1.3, 1.2, 1.2]
     headers = [
         "Damage ID",
         "Blade ID",
@@ -319,42 +584,117 @@ def render_expandable_damages_table(
         "CS Position",
         "Radial Position [m]",
     ]
-    st.markdown(
-        "<div class='damage-summary-header-row'>"
-        + "".join(
-            f"<div class='damage-summary-header'>{html.escape(header)}</div>"
-            for header in headers
-        )
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    selected_damage_id = None
+    damage_records = page_df.to_dict("records")
 
-    wind_farm_id = st.session_state.get("wind_farm_id")
-    wtg_id = st.session_state.get("wtg_id")
-    for damage in page_df.to_dict("records"):
-        severity_class = {
-            "Critical": "severity-critical",
-            "To repair": "severity-to-repair",
-            "Cosmetic": "severity-cosmetic",
-        }.get(str(damage["severity"]), "")
-        cells = [
-            (text(damage["damage_id"]), ""),
-            (text(damage["blade_id"]), ""),
-            (text(damage["severity"]), severity_class),
-            (text(damage["damage_type"]), ""),
-            (text(damage["depth"]), ""),
-            (text(damage["cs_position"]), ""),
-            (number(damage["radial_position_m"]), ""),
-        ]
-        st.markdown(
-            "<div class='damage-summary-row'>"
-            + "".join(
-                f"<div class='damage-summary-cell {css_class}'>{cell}</div>"
-                for cell, css_class in cells
+    with st.container(key="damage_summary_desktop_table", gap=None):
+        with st.container(key="damage_summary_header", gap=None):
+            header_columns = st.columns(widths, gap=None, vertical_alignment="bottom")
+            for index, (column, header) in enumerate(zip(header_columns, headers)):
+                css_class = (
+                    "damage-summary-header first"
+                    if index == 0
+                    else "damage-summary-header"
+                )
+                column.markdown(
+                    f"<div class='{css_class}'>{html.escape(header)}</div>",
+                    unsafe_allow_html=True,
+                )
+
+        with st.container(key="damage_summary_table_body", gap=None):
+            for damage in damage_records:
+                severity_class = {
+                    "Critical": "severity-critical",
+                    "To repair": "severity-to-repair",
+                    "Cosmetic": "severity-cosmetic",
+                }.get(str(damage["severity"]), "")
+                damage_id = int(damage["damage_id"])
+                with st.container(key=f"damage_summary_row_{damage_id}", gap=None):
+                    row_columns = st.columns(
+                        widths, gap=None, vertical_alignment="center"
+                    )
+                    with row_columns[0].container(
+                        key=f"damage_summary_cell_id_{damage_id}"
+                    ):
+                        if st.button(
+                            str(damage_id),
+                            key=f"open_damage_{damage_id}",
+                            type="tertiary",
+                        ):
+                            selected_damage_id = damage_id
+
+                    cells = [
+                        (text(damage["blade_id"]), ""),
+                        (text(damage["severity"]), severity_class),
+                        (text(damage["damage_type"]), ""),
+                        (text(damage["depth"]), ""),
+                        (text(damage["cs_position"]), ""),
+                        (number(damage["radial_position_m"]), ""),
+                    ]
+                    for cell_index, (column, (cell, css_class)) in enumerate(
+                        zip(row_columns[1:], cells),
+                        start=1,
+                    ):
+                        with column.container(
+                            key=f"damage_summary_cell_{damage_id}_{cell_index}"
+                        ):
+                            st.markdown(
+                                f"<div class='damage-summary-cell {css_class}'>{cell}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+    with st.container(key="damage_summary_mobile_table", gap=None):
+        for damage in damage_records:
+            severity_class = {
+                "Critical": "severity-critical",
+                "To repair": "severity-to-repair",
+                "Cosmetic": "severity-cosmetic",
+            }.get(str(damage["severity"]), "")
+            damage_id = int(damage["damage_id"])
+            mobile_rows = [
+                ("Blade ID", text(damage["blade_id"]), ""),
+                ("Severity", text(damage["severity"]), severity_class),
+                ("Type", text(damage["damage_type"]), ""),
+                ("Depth", text(damage["depth"]), ""),
+                ("CS Position", text(damage["cs_position"]), ""),
+                ("Radial Position [m]", number(damage["radial_position_m"]), ""),
+            ]
+            fields_html = "".join(
+                "<div class='damage-mobile-field'>"
+                f"<div class='damage-mobile-label'>{html.escape(label)}</div>"
+                f"<div class='damage-mobile-value {css_class}'>{value}</div>"
+                "</div>"
+                for label, value, css_class in mobile_rows
             )
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+
+            with st.container(
+                key=f"damage_summary_mobile_card_{damage_id}",
+                border=True,
+                gap=None,
+            ):
+                with st.container(
+                    key=f"damage_summary_mobile_id_row_{damage_id}",
+                    horizontal=True,
+                    vertical_alignment="center",
+                    gap=None,
+                ):
+                    st.markdown(
+                        "<div class='damage-mobile-id-label'>Damage ID</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(
+                        str(damage_id),
+                        key=f"open_damage_mobile_{damage_id}",
+                        type="tertiary",
+                    ):
+                        selected_damage_id = damage_id
+
+                st.markdown(
+                    f"<div class='damage-mobile-fields'>{fields_html}</div>",
+                    unsafe_allow_html=True,
+                )
+
+    return selected_damage_id
 
 
 def selected_rows(event: Any) -> list[int]:
@@ -1126,17 +1466,182 @@ def show_damages_page(session: Session) -> None:
     st.header(
         f"Damages for turbine {turbine.wtg_id} ({turbine.wt_installation_number})"
     )
+
     damages_df = damages_dataframe(session, turbine.wtg_id)
 
     if damages_df.empty:
         st.info("No damages are defined for this turbine.")
         return
 
+    blade_ids = session.scalars(
+        select(Blade.blade_id)
+        .where(Blade.wtg_id == turbine.wtg_id)
+        .order_by(Blade.blade_id)
+    ).all()
+    page_key = f"damage_summary_page_{turbine.wtg_id}"
+    severity_options = [
+        SeverityType.CRITICAL.value,
+        SeverityType.TO_REPAIR.value,
+        SeverityType.COSMETIC.value,
+    ]
+    damage_type_options = [damage_type.value for damage_type in DamageType]
+    blade_length = float(turbine.wind_farm.blade_length)
+    selected_blade_ids = []
+    selected_severities = []
+    selected_damage_types = []
+    st.markdown(
+        """
+        <style>
+            .damage-filter-separator {
+                border-left: 1px solid rgba(49, 51, 63, 0.18);
+                min-height: 4.25rem;
+                margin: 0.2rem auto 0 auto;
+                width: 1px;
+            }
+            .damage-filter-horizontal-separator {
+                border-top: 1px solid rgba(49, 51, 63, 0.18);
+                margin: 0.75rem 0;
+            }
+            .radial-slider-values {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 0.5rem;
+                font-size: 0.85rem;
+                color: rgba(49, 51, 63, 0.75);
+                margin-top: -0.35rem;
+            }
+            .radial-slider-values span:nth-child(2),
+            .radial-slider-values span:nth-child(3) {
+                text-align: center;
+                font-weight: 600;
+            }
+            .radial-slider-values span:last-child {
+                text-align: right;
+            }
+            @media (max-width: 640px) {
+                .damage-filter-separator {
+                    border-left: 0;
+                    border-top: 1px solid rgba(49, 51, 63, 0.18);
+                    min-height: 0;
+                    width: 100%;
+                    margin: 0.75rem 0;
+                }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        st.markdown("**Filters**")
+        blade_filter_col, separator_col, severity_filter_col = st.columns(
+            [1, 0.04, 1],
+            vertical_alignment="top",
+        )
+        separator_col.markdown(
+            "<div class='damage-filter-separator'></div>",
+            unsafe_allow_html=True,
+        )
+
+        blade_filter_col.caption("Blade IDs")
+        severity_filter_col.caption("Severity")
+
+        blade_checkbox_cols = blade_filter_col.columns(
+            len(blade_ids),
+            gap="small",
+            vertical_alignment="top",
+        )
+        for blade_col, blade_id in zip(blade_checkbox_cols, blade_ids):
+            if blade_col.checkbox(
+                str(blade_id),
+                value=True,
+                key=f"damage_blade_filter_{turbine.wtg_id}_{blade_id}",
+                on_change=lambda: st.session_state.update({page_key: 1}),
+            ):
+                selected_blade_ids.append(blade_id)
+
+        severity_checkbox_cols = severity_filter_col.columns(
+            len(severity_options),
+            gap=None,
+            vertical_alignment="top",
+        )
+        for severity_col, severity in zip(severity_checkbox_cols, severity_options):
+            if severity_col.checkbox(
+                severity,
+                value=True,
+                key=f"damage_severity_filter_{turbine.wtg_id}_{severity}",
+                on_change=lambda: st.session_state.update({page_key: 1}),
+            ):
+                selected_severities.append(severity)
+
+        st.markdown(
+            "<div class='damage-filter-horizontal-separator'></div>",
+            unsafe_allow_html=True,
+        )
+        damage_type_filter_col, bottom_separator_col, radial_filter_col = st.columns(
+            [1, 0.04, 1],
+            vertical_alignment="top",
+        )
+        bottom_separator_col.markdown(
+            "<div class='damage-filter-separator'></div>",
+            unsafe_allow_html=True,
+        )
+
+        damage_type_filter_col.caption("Damage Type")
+        selected_damage_types = damage_type_filter_col.multiselect(
+            "Damage Type",
+            options=damage_type_options,
+            default=damage_type_options,
+            key=f"damage_type_filter_{turbine.wtg_id}",
+            on_change=lambda: st.session_state.update({page_key: 1}),
+            label_visibility="collapsed",
+        )
+
+        radial_filter_col.caption("Radial Position [m]")
+        selected_radial_region = radial_filter_col.slider(
+            "Radial Position [m]",
+            min_value=0.0,
+            max_value=blade_length,
+            value=(0.0, blade_length),
+            step=0.1,
+            format="%.1f m",
+            key=f"damage_radial_filter_{turbine.wtg_id}",
+            on_change=lambda: st.session_state.update({page_key: 1}),
+            label_visibility="collapsed",
+        )
+        radial_filter_col.markdown(
+            "<div class='radial-slider-values'>"
+            f"<span>0.0 m</span>"
+            f"<span>{selected_radial_region[0]:.1f} m</span>"
+            f"<span>{selected_radial_region[1]:.1f} m</span>"
+            f"<span>{blade_length:.1f} m</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    radial_start, radial_end = selected_radial_region
+    filtered_damages_df = damages_df[
+        damages_df["blade_id"].isin(selected_blade_ids)
+        & damages_df["severity"].isin(selected_severities)
+        & damages_df["damage_type"].isin(selected_damage_types)
+        & damages_df["radial_position_m"].between(radial_start, radial_end)
+    ]
+
     st.subheader("Damage Table")
     if isinstance(filtered_damages_df, pd.DataFrame):
-        render_expandable_damages_table(filtered_damages_df, rows_per_page=10)
+        selected_damage_id = render_damage_table(
+            filtered_damages_df,
+            rows_per_page=10,
+        )
     else:
-        st.write("No damages found.")
+        selected_damage_id = None
+
+    if selected_damage_id is not None:
+
+        @st.dialog(f"Damage {selected_damage_id}")
+        def damage_dialog() -> None:
+            pass
+
+        damage_dialog()
 
 
 def sync_navigation_from_query_params() -> None:
