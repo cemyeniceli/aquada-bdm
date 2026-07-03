@@ -219,29 +219,35 @@ def render_expandable_damages_table(
         total_pages,
     )
 
-    prev_col, info_col, next_col = st.columns([1, 2, 1])
-    if prev_col.button(
-        "← Previous",
-        key=f"{page_key}_previous",
-        disabled=st.session_state[page_key] <= 1,
-    ):
-        st.session_state[page_key] -= 1
-        st.rerun()
-    if next_col.button(
-        "Next →",
-        key=f"{page_key}_next",
-        disabled=st.session_state[page_key] >= total_pages,
-    ):
-        st.session_state[page_key] += 1
-        st.rerun()
-
     start = (st.session_state[page_key] - 1) * rows_per_page
     end = min(start + rows_per_page, total_rows)
-    info_col.markdown(
-        f"<div style='text-align:center'>Page {st.session_state[page_key]} of {total_pages} "
-        f"&nbsp;·&nbsp; Showing {start + 1}-{end} of {total_rows}</div>",
-        unsafe_allow_html=True,
-    )
+
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+        gap="small",
+    ):
+        if st.button(
+            "← Previous",
+            key=f"{page_key}_previous",
+            disabled=st.session_state[page_key] <= 1,
+        ):
+            st.session_state[page_key] -= 1
+            st.rerun()
+        st.markdown(
+            f"<div style='text-align:center; white-space:nowrap'>"
+            f"Page {st.session_state[page_key]} of {total_pages} "
+            f"&nbsp;·&nbsp; Showing {start + 1}-{end} of {total_rows}</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Next →",
+            key=f"{page_key}_next",
+            disabled=st.session_state[page_key] >= total_pages,
+        ):
+            st.session_state[page_key] += 1
+            st.rerun()
 
     page_df = damages_df.iloc[start:end]
 
@@ -291,6 +297,14 @@ def render_expandable_damages_table(
             .damage-summary-cell.severity-cosmetic {
                 background-color: rgba(102, 187, 106, 0.22);
             }
+            .damage-summary-link {
+                color: inherit !important;
+                text-decoration: none !important;
+            }
+            .damage-summary-link:hover {
+                color: inherit !important;
+                text-decoration: underline !important;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -315,6 +329,8 @@ def render_expandable_damages_table(
         unsafe_allow_html=True,
     )
 
+    wind_farm_id = st.session_state.get("wind_farm_id")
+    wtg_id = st.session_state.get("wtg_id")
     for damage in page_df.to_dict("records"):
         severity_class = {
             "Critical": "severity-critical",
@@ -1117,7 +1133,10 @@ def show_damages_page(session: Session) -> None:
         return
 
     st.subheader("Damage Table")
-    render_expandable_damages_table(damages_df, rows_per_page=10)
+    if isinstance(filtered_damages_df, pd.DataFrame):
+        render_expandable_damages_table(filtered_damages_df, rows_per_page=10)
+    else:
+        st.write("No damages found.")
 
 
 def sync_navigation_from_query_params() -> None:
