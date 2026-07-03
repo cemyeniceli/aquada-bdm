@@ -204,7 +204,7 @@ def damages_dataframe(session: Session, wtg_id: int) -> pd.DataFrame:
 @st.dialog("Damage details", width="large")
 def damage_dialog(selected_damage: pd.Series) -> None:
     info_column, photo_column = st.columns(
-        [0.4, 0.6], gap="small", vertical_alignment="top"
+        [0.3, 0.7], gap="small", vertical_alignment="top"
     )
 
     label_map = {
@@ -232,7 +232,7 @@ def damage_dialog(selected_damage: pd.Series) -> None:
         if field in selected_damage.index and field not in excluded_info_fields
     ]
     ordered_fields.extend(
-        field
+        field  # type: ignore
         for field in selected_damage.index
         if field not in ordered_fields and field not in excluded_info_fields
     )
@@ -282,41 +282,43 @@ def damage_dialog(selected_damage: pd.Series) -> None:
     """
 
     with info_column:
-        st.markdown("#### Damage information")
-        rows_html = "".join(
-            "<div class='damage-dialog-field'>"
-            f"<div class='damage-dialog-label'>{html.escape(label_map.get(field, field.replace('_', ' ').title()))}</div>"
-            f"<div class='damage-dialog-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"
-            "</div>"
-            for field in ordered_fields
-        )
-        st.markdown(
-            dialog_style + f"<div class='damage-dialog-info'>{rows_html}</div>",
-            unsafe_allow_html=True,
-        )
-
-    with photo_column:
-        st.markdown("#### Damage photo")
-        photo_path = str(selected_damage["photo"])
-        if photo_path and os.path.exists(photo_path):
-            st.image(photo_path, use_container_width=True)
-        else:
-            st.warning("No damage photo found.")
-
-        comments_html = "".join(
-            "<div class='damage-dialog-comment-field'>"
-            f"<div class='damage-dialog-comment-label'>{html.escape(label_map[field])}</div>"
-            f"<div class='damage-dialog-comment-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"
-            "</div>"
-            for field in comment_fields
-            if field in selected_damage.index
-        )
-        if comments_html:
-            st.markdown("#### Comments")
+        with st.container(key="damage_dialog_info_container"):
+            st.markdown("#### Damage information")
+            rows_html = "".join(
+                "<div class='damage-dialog-field'>"
+                f"<div class='damage-dialog-label'>{html.escape(label_map.get(field, field.replace('_', ' ').title()))}</div>"
+                f"<div class='damage-dialog-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"  # type: ignore
+                "</div>"
+                for field in ordered_fields
+            )
             st.markdown(
-                f"<div class='damage-dialog-comments'>{comments_html}</div>",
+                dialog_style + f"<div class='damage-dialog-info'>{rows_html}</div>",
                 unsafe_allow_html=True,
             )
+
+    with photo_column:
+        with st.container(key="damage_dialog_photo_container"):
+            st.markdown("#### Damage photo")
+            photo_path = str(selected_damage["photo"])
+            if photo_path and os.path.exists(photo_path):
+                st.image(photo_path, use_container_width=True)
+            else:
+                st.warning("No damage photo found.")
+
+            comments_html = "".join(
+                "<div class='damage-dialog-comment-field'>"
+                f"<div class='damage-dialog-comment-label'>{html.escape(label_map[field])}</div>"
+                f"<div class='damage-dialog-comment-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"  # type: ignore
+                "</div>"
+                for field in comment_fields
+                if field in selected_damage.index
+            )
+            if comments_html:
+                st.markdown("#### Comments")
+                st.markdown(
+                    f"<div class='damage-dialog-comments'>{comments_html}</div>",
+                    unsafe_allow_html=True,
+                )
 
 
 def render_damage_table(
