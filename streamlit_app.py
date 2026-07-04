@@ -59,6 +59,25 @@ def existing_or_random_damage_photo_path(
     return rng.choice(photo_paths)
 
 
+def damage_type_example_photo_path(damage_type: DamageType) -> str:
+    """Return the example photo path for a damage type."""
+    photo_name_by_damage_type = {
+        DamageType.CRACK: "crack",
+        DamageType.EROSION_TYPE_1: "erosion",
+        DamageType.EROSION_TYPE_2: "erosion",
+        DamageType.LIGHTNING: "mechanical",
+        DamageType.MECHANICAL: "mechanical",
+        DamageType.LE_FILM_DAMAGE: "film_damage",
+    }
+    photo_path = os.path.join(
+        DAMAGE_PHOTO_DIRECTORY,
+        f"example_{photo_name_by_damage_type[damage_type]}.jpg",
+    )
+    if not os.path.exists(photo_path):
+        raise FileNotFoundError(f"Damage example photo not found: {photo_path!r}.")
+    return photo_path
+
+
 def repair_existing_damage_records(session: Session) -> None:
     """Repair old demo rows so they satisfy current photo and measurement rules."""
     photo_paths = available_damage_photo_paths()
@@ -148,10 +167,6 @@ def seed_dummy_data(session: Session) -> None:
     max_damages_per_blade = 50
     blade_length = float(wind_farm.blade_length)
     rng = random.Random(42)
-    photo_rng = random.Random(43)
-    photo_paths = available_damage_photo_paths()
-    if not photo_paths:
-        raise FileNotFoundError(f"No photos found in {DAMAGE_PHOTO_DIRECTORY!r}.")
 
     for turbine_number in range(1, turbine_count + 1):
         layout_index = turbine_number - 1
@@ -182,16 +197,8 @@ def seed_dummy_data(session: Session) -> None:
                 damage_id = blade_id * 1000 + damage_number
                 inspection_month = ((damage_number - 1) // 28) % 12 + 1
                 inspection_day = ((damage_number - 1) % 28) + 1
-                candidate_photo_path = os.path.join(
-                    DAMAGE_PHOTO_DIRECTORY,
-                    f"{((turbine_number - 1) % 4) + 1}_2016.06.02_"
-                    f"{((damage_number - 1) % 30) + 1:02}.jpg",
-                )
-                photo_path = existing_or_random_damage_photo_path(
-                    candidate_photo_path,
-                    photo_paths,
-                    photo_rng,
-                )
+                damage_type = damage_types[enum_index % len(damage_types)]
+                photo_path = damage_type_example_photo_path(damage_type)
                 is_area_damage = damage_number % 3 != 0
                 radial_area_size = (
                     0.05 + 0.01 * (damage_number % 20) if is_area_damage else 0.0
@@ -210,7 +217,7 @@ def seed_dummy_data(session: Session) -> None:
                         severity=rng.choices(
                             severity_values, weights=severity_weights, k=1
                         )[0],
-                        damage_type=damage_types[enum_index % len(damage_types)],
+                        damage_type=damage_type,
                         depth=depths[enum_index % len(depths)],
                         cs_position=cs_positions[enum_index % len(cs_positions)],
                         radial_position=radial_position,
