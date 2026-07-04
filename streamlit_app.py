@@ -291,7 +291,13 @@ def wind_farm_damage_radial_dataframe(
     session: Session, wind_farm_id: int
 ) -> pd.DataFrame:
     stmt = (
-        select(Damage.severity, Damage.radial_position)
+        select(
+            Damage.severity,
+            Damage.radial_position,
+            Damage.radial_area_size,
+            Damage.size,
+            Damage.orientation,
+        )
         .join(Blade, Damage.blade_id == Blade.blade_id)
         .join(Turbine, Blade.wtg_id == Turbine.wtg_id)
         .where(Turbine.wind_farm_id == wind_farm_id)
@@ -303,8 +309,11 @@ def wind_farm_damage_radial_dataframe(
             {
                 "severity": severity.value,
                 "radial_position_m": radial_position,
+                "radial_area_size_m": radial_area_size,
+                "size_m": size,
+                "orientation": orientation,
             }
-            for severity, radial_position in rows
+            for severity, radial_position, radial_area_size, size, orientation in rows
         ]
     )
 
@@ -1732,6 +1741,129 @@ def show_wind_farms_page(session: Session) -> None:
         st.rerun()
 
 
+def numeric_dataframe_column(
+    df: pd.DataFrame,
+    column_name: str,
+    *,
+    default: float = 0.0,
+    lower: float | None = None,
+) -> pd.Series:
+    """Return a numeric dataframe column, or a default-valued series if missing."""
+    if column_name not in df.columns:
+        return pd.Series(default, index=df.index)
+
+    numeric_values = pd.to_numeric(df[column_name], errors="coerce")
+    if not isinstance(numeric_values, pd.Series):
+        raise TypeError
+
+    numeric_values = numeric_values.fillna(default)
+    if lower is not None:
+        numeric_values = numeric_values.clip(lower=lower)
+    return numeric_values
+
+
+def damage_radial_extents_dataframe(
+    damages_df: pd.DataFrame, blade_length: float
+) -> pd.DataFrame:
+    """Return damages with clipped radial extent start/end columns."""
+    extent_df = damages_df.copy()
+    extent_df["radial_position_m"] = pd.to_numeric(
+        extent_df["radial_position_m"], errors="coerce"
+    )
+    radial_area_sizes = numeric_dataframe_column(
+        extent_df,
+        "radial_area_size_m",
+        lower=0.0,
+    )
+    damage_sizes = numeric_dataframe_column(extent_df, "size_m", lower=0.0)
+    orientations = numeric_dataframe_column(extent_df, "orientation")
+
+    local_half_radial_extents = (damage_sizes / 2.0) * orientations.map(
+        lambda orientation: math.cos(math.radians(float(orientation)))
+    )
+    local_half_radial_extents = local_half_radial_extents.mask(
+        local_half_radial_extents.abs() < 1e-12,
+        0.0,
+    )
+    half_radial_extents = (radial_area_sizes / 2.0).where(
+        radial_area_sizes > 0.0,
+        local_half_radial_extents,
+    )
+    raw_extent_starts = extent_df["radial_position_m"] - half_radial_extents
+    raw_extent_ends = extent_df["radial_position_m"] + half_radial_extents
+    extent_df["radial_extent_start_m"] = raw_extent_starts.combine(
+        raw_extent_ends,
+        min,
+    )
+    extent_df["radial_extent_end_m"] = raw_extent_starts.combine(
+        raw_extent_ends,
+        max,
+    )
+    extent_df = extent_df[
+        extent_df["radial_position_m"].notna()
+        & extent_df["radial_extent_end_m"].ge(0)
+        & extent_df["radial_extent_start_m"].le(blade_length)
+    ].copy()
+    if not isinstance(extent_df, pd.DataFrame):
+        raise TypeError
+
+    extent_df["radial_extent_start_m"] = extent_df["radial_extent_start_m"].clip(
+        lower=0.0,
+        upper=blade_length,
+    )
+    extent_df["radial_extent_end_m"] = extent_df["radial_extent_end_m"].clip(
+        lower=0.0,
+        upper=blade_length,
+    )
+    return extent_df
+
+
+def radial_damage_histogram_bins_dataframe(
+    histogram_df: pd.DataFrame, blade_length: float
+) -> pd.DataFrame:
+    """Expand each damage into every radial histogram bin its extent overlaps."""
+    bin_count = max(1, math.ceil(blade_length / RADIAL_HISTOGRAM_BIN_SIZE_M))
+    max_bin_index = bin_count - 1
+    records: list[dict[str, float | str]] = []
+
+    for severity, extent_start, extent_end in histogram_df[
+        ["severity", "radial_extent_start_m", "radial_extent_end_m"]
+    ].itertuples(index=False, name=None):
+        extent_start = float(extent_start)
+        extent_end = float(extent_end)
+        if not math.isfinite(extent_start) or not math.isfinite(extent_end):
+            continue
+
+        if extent_end <= extent_start:
+            bin_indexes = [
+                min(
+                    max(math.floor(extent_start / RADIAL_HISTOGRAM_BIN_SIZE_M), 0),
+                    max_bin_index,
+                )
+            ]
+        else:
+            first_bin_index = min(
+                max(math.floor(extent_start / RADIAL_HISTOGRAM_BIN_SIZE_M), 0),
+                max_bin_index,
+            )
+            last_bin_position = math.nextafter(extent_end, -math.inf)
+            last_bin_index = min(
+                max(math.floor(last_bin_position / RADIAL_HISTOGRAM_BIN_SIZE_M), 0),
+                max_bin_index,
+            )
+            bin_indexes = range(first_bin_index, last_bin_index + 1)
+
+        records.extend(
+            {
+                "severity": str(severity),
+                "radial_bin_start_m": bin_index * RADIAL_HISTOGRAM_BIN_SIZE_M,
+            }
+            for bin_index in bin_indexes
+        )
+
+    return pd.DataFrame(records, columns=["severity", "radial_bin_start_m"])
+
+
 def render_wind_farm_radial_damage_histogram(
     damages_df: pd.DataFrame, blade_length: float
 ) -> tuple[str, float, float] | None:
@@ -1740,13 +1872,7 @@ def render_wind_farm_radial_damage_histogram(
         st.info("No damages are available for the radial severity histogram.")
         return None
 
-    histogram_df = damages_df.copy()
-    histogram_df["radial_position_m"] = pd.to_numeric(
-        histogram_df["radial_position_m"], errors="coerce"
-    )
-    histogram_df = histogram_df[
-        histogram_df["radial_position_m"].between(0, blade_length, inclusive="both")
-    ].copy()
+    histogram_df = damage_radial_extents_dataframe(damages_df, blade_length)
 
     if histogram_df.empty:
         st.info(
@@ -1759,16 +1885,14 @@ def render_wind_farm_radial_damage_histogram(
         SeverityType.TO_REPAIR.value,
         SeverityType.CRITICAL.value,
     ]
-    bin_count = max(1, math.ceil(blade_length / RADIAL_HISTOGRAM_BIN_SIZE_M))
-    max_bin_start = (bin_count - 1) * RADIAL_HISTOGRAM_BIN_SIZE_M
-    histogram_df["radial_bin_start_m"] = (
-        (histogram_df["radial_position_m"] // RADIAL_HISTOGRAM_BIN_SIZE_M)
-        * RADIAL_HISTOGRAM_BIN_SIZE_M
-    ).clip(upper=max_bin_start)  # type: ignore
+    binned_histogram_df = radial_damage_histogram_bins_dataframe(
+        histogram_df,
+        blade_length,
+    )
 
     fig = go.Figure()
     for severity in severity_order:
-        severity_df = histogram_df[histogram_df["severity"] == severity]
+        severity_df = binned_histogram_df[binned_histogram_df["severity"] == severity]
         if not isinstance(severity_df, pd.DataFrame):
             fig.add_trace(go.Bar(x=[], y=[], name=severity, opacity=0.75))
             continue
@@ -2030,24 +2154,29 @@ def show_wind_farm_damages_page(session: Session) -> None:
             label_visibility="collapsed",
         )
 
-    radial_positions = pd.to_numeric(damages_df["radial_position_m"], errors="coerce")
-    if not isinstance(radial_positions, pd.Series):
-        raise TypeError
+    damages_with_extents_df = damage_radial_extents_dataframe(damages_df, blade_length)
+    radial_starts = damages_with_extents_df["radial_extent_start_m"]
+    radial_ends = damages_with_extents_df["radial_extent_end_m"]
+    local_damage_mask = radial_starts == radial_ends
     if radial_end >= blade_length:
-        radial_mask = radial_positions.between(
+        local_radial_mask = radial_starts.between(
             radial_start,
             radial_end,
             inclusive="both",
         )
     else:
-        radial_mask = (radial_positions >= radial_start) & (
-            radial_positions < radial_end
+        local_radial_mask = (radial_starts >= radial_start) & (
+            radial_starts < radial_end
         )
+    area_radial_mask = (radial_ends > radial_start) & (radial_starts < radial_end)
+    radial_mask = (local_damage_mask & local_radial_mask) | (
+        ~local_damage_mask & area_radial_mask
+    )
 
-    filtered_damages_df = damages_df[
-        (damages_df["severity"] == severity)
+    filtered_damages_df = damages_with_extents_df[
+        (damages_with_extents_df["severity"] == severity)
         & radial_mask
-        & damages_df["damage_type"].isin(selected_damage_types)
+        & damages_with_extents_df["damage_type"].isin(selected_damage_types)
     ]
 
     st.subheader("Damage Table")
