@@ -200,9 +200,7 @@ def seed_dummy_data(session: Session) -> None:
                     0.0 if is_area_damage else 0.02 + 0.005 * (damage_number % 30)
                 )
                 damage_density = (
-                    5.0 + float((damage_number * 3) % 95)
-                    if is_area_damage
-                    else 0.0
+                    5.0 + float((damage_number * 3) % 95) if is_area_damage else 0.0
                 )
                 blade.damages.append(
                     Damage(
@@ -396,6 +394,7 @@ def damage_dialog(selected_damage: pd.Series) -> None:
         "cs_position": "CS Position",
         "radial_position_m": "Radial Position [m]",
         "radial_area_size_m": "Radial Area Size [m]",
+        "damage_measurement_mode": "Single Damage / Damage Area",
         "size_m": "Size [m]",
         "density_percent": "Density [%]",
         "orientation": "Orientation [deg]",
@@ -404,16 +403,40 @@ def damage_dialog(selected_damage: pd.Series) -> None:
     }
     comment_fields = ["inspection_comment", "analyzer_comment"]
     excluded_info_fields = {"photo", *comment_fields}
+    dialog_values = selected_damage.to_dict()
+    radial_area_size = pd.to_numeric(
+        pd.Series([selected_damage.get("radial_area_size_m")]),
+        errors="coerce",
+    ).iloc[0]  # type: ignore
+    dialog_values["damage_measurement_mode"] = (
+        "Damage Area"
+        if pd.notna(radial_area_size) and float(radial_area_size) > 0.0
+        else "Single Damage"
+    )
     ordered_fields = [
         field
         for field in label_map
-        if field in selected_damage.index and field not in excluded_info_fields
+        if field in dialog_values and field not in excluded_info_fields
     ]
     ordered_fields.extend(
         field  # type: ignore
         for field in selected_damage.index
         if field not in ordered_fields and field not in excluded_info_fields
     )
+
+    def format_dialog_value(field: str, value: Any) -> str:
+        if pd.isna(value):
+            return ""
+        if field in {
+            "radial_position_m",
+            "radial_area_size_m",
+            "size_m",
+            "orientation",
+        }:
+            return f"{float(value):.2f}"
+        if field == "density_percent":
+            return f"{float(value):.0f}"
+        return str(value)
 
     dialog_style = """
         <style>
@@ -465,7 +488,7 @@ def damage_dialog(selected_damage: pd.Series) -> None:
             rows_html = "".join(
                 "<div class='damage-dialog-field'>"
                 f"<div class='damage-dialog-label'>{html.escape(label_map.get(field, field.replace('_', ' ').title()))}</div>"
-                f"<div class='damage-dialog-value'>{'' if pd.isna(selected_damage[field]) else html.escape(str(selected_damage[field]))}</div>"  # type: ignore
+                f"<div class='damage-dialog-value'>{html.escape(format_dialog_value(field, dialog_values[field]))}</div>"
                 "</div>"
                 for field in ordered_fields
             )
