@@ -1941,7 +1941,7 @@ def render_wind_farm_radial_damage_histogram(
         legend_title_text="Severity",
         barmode="overlay",
         bargap=0.04,
-        xaxis={"range": [0, blade_length + 0.5]},
+        xaxis={"range": [0, blade_length]},
         yaxis={"dtick": 5},
         clickmode="event+select",
     )
@@ -2009,6 +2009,65 @@ def selected_histogram_bin(
     return None
 
 
+@st.dialog("Remove turbine", icon="⚠️")
+def remove_turbine_dialog(session: Session) -> None:
+    """Select and delete a turbine from the current wind farm."""
+    wind_farm_id = st.session_state.get("remove_turbine_wind_farm_id")
+    farm = session.get(WindFarm, wind_farm_id) if wind_farm_id is not None else None
+
+    if farm is None:
+        st.error("Wind farm not found.")
+        if st.button("Close"):
+            st.session_state.pop("remove_turbine_wind_farm_id", None)
+            st.rerun()
+        return
+
+    turbines = session.scalars(
+        select(Turbine)
+        .where(Turbine.wind_farm_id == farm.id)
+        .order_by(Turbine.wt_installation_number)
+    ).all()
+
+    if not turbines:
+        st.info("No turbines are defined for this wind farm.")
+        if st.button("Close"):
+            st.session_state.pop("remove_turbine_wind_farm_id", None)
+            st.rerun()
+        return
+
+    turbine_by_wtg_id = {turbine.wtg_id: turbine for turbine in turbines}
+    selected_wtg_id = st.selectbox(
+        "WT installation number",
+        [turbine.wtg_id for turbine in turbines],
+        format_func=lambda wtg_id: turbine_by_wtg_id[wtg_id].wt_installation_number,
+    )
+    selected_turbine = turbine_by_wtg_id[int(selected_wtg_id)]
+
+    st.warning("This will also delete the turbine's blades and damages.")
+
+    with st.container(horizontal=True, gap="small"):
+        if st.button("Delete", type="primary"):
+            deleted_wtg_id = selected_turbine.wtg_id
+            deleted_installation_number = selected_turbine.wt_installation_number
+            try:
+                session.delete(selected_turbine)
+                session.commit()
+                st.session_state.pop("remove_turbine_wind_farm_id", None)
+                if st.session_state.get("wtg_id") == deleted_wtg_id:
+                    st.session_state.wtg_id = None
+                st.session_state.turbine_success_message = (
+                    f"Deleted turbine: {deleted_installation_number}"
+                )
+                st.rerun()
+            except SQLAlchemyError as exc:
+                session.rollback()
+                st.error(f"Could not delete turbine: {exc}")
+
+        if st.button("Cancel"):
+            st.session_state.pop("remove_turbine_wind_farm_id", None)
+            st.rerun()
+
+
 def show_turbines_page(session: Session) -> None:
     farm = session.get(WindFarm, st.session_state.wind_farm_id)
     if farm is None:
@@ -2024,11 +2083,26 @@ def show_turbines_page(session: Session) -> None:
         st.rerun()
 
     st.header(f"Turbines in {farm.park_name}")
+
+    if success_message := st.session_state.pop("turbine_success_message", None):
+        st.toast(success_message, icon="✅", duration=3)
+
     turbines_df = turbines_dataframe(session, farm.id)
+
+    with st.container(horizontal=True, gap="small"):
+        st.button("Add Turbine(s)", key="add_turbines_button")
+        if st.button(
+            "Remove Turbine",
+            key="remove_turbine_button",
+            disabled=turbines_df.empty,
+        ):
+            st.session_state.remove_turbine_wind_farm_id = farm.id
+
+    if st.session_state.get("remove_turbine_wind_farm_id") == farm.id:
+        remove_turbine_dialog(session)
 
     if turbines_df.empty:
         st.info("No turbines are defined for this wind farm yet.")
-        st.button("Add Turbines")
         return
 
     fig = px.scatter(
