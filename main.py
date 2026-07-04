@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import random
 from datetime import date
 
 from sqlalchemy import create_engine, func, select
@@ -28,6 +30,15 @@ def create_dummy_database() -> None:
     damage_types = list(DamageType)
     depths = list(DepthType)
     cs_positions = list(CSPosition)
+    photo_rng = random.Random(42)
+    photo_directory = os.path.join("examples", "Wind Farm Inspection", "photos")
+    photo_paths = sorted(
+        os.path.join(photo_directory, file_name)
+        for file_name in os.listdir(photo_directory)
+        if os.path.isfile(os.path.join(photo_directory, file_name))
+    )
+    if not photo_paths:
+        raise FileNotFoundError(f"No photos found in {photo_directory!r}.")
 
     with Session(engine) as session:
         wind_farm = WindFarm(
@@ -56,6 +67,19 @@ def create_dummy_database() -> None:
                 for damage_number in range(1, 4):
                     enum_index = turbine_number + blade_number + damage_number
                     damage_id = blade_id * 100 + damage_number
+                    candidate_photo_path = os.path.join(
+                        photo_directory,
+                        f"{turbine_number}_2016.06.02_{damage_number:02}.jpg",
+                    )
+                    photo_path = (
+                        candidate_photo_path
+                        if os.path.exists(candidate_photo_path)
+                        else photo_rng.choice(photo_paths)
+                    )
+                    is_area_damage = damage_number % 2 == 0
+                    radial_area_size = 0.5 * damage_number if is_area_damage else 0.0
+                    damage_size = 0.0 if is_area_damage else 0.2 * damage_number
+                    damage_density = 10.0 * damage_number if is_area_damage else 0.0
                     damage = Damage(
                         damage_id=damage_id,
                         inspection_date=date(2026, 1, damage_number),
@@ -65,14 +89,11 @@ def create_dummy_database() -> None:
                         depth=depths[enum_index % len(depths)],
                         cs_position=cs_positions[enum_index % len(cs_positions)],
                         radial_position=10.0 * blade_number + damage_number,
-                        radial_area_size=0.5 * damage_number,
-                        size=0.2 * damage_number,
-                        density=10.0 * damage_number,
+                        radial_area_size=radial_area_size,
+                        size=damage_size,
+                        density=damage_density,
                         orientation=15.0 * damage_number,
-                        photo=(
-                            "examples/Wind Farm Inspection/photos/"
-                            f"{turbine_number}_2016.06.02_{damage_number:02}.jpg"
-                        ),
+                        photo=photo_path,
                         inspection_comment=(
                             f"Dummy inspection comment for turbine {turbine_number}, "
                             f"blade {blade_number}, damage {damage_number}."

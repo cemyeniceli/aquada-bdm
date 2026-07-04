@@ -173,6 +173,32 @@ class Damage(Base):
     """Blade damage record from an inspection."""
 
     __tablename__ = "damages"
+    __table_args__ = (
+        # Radial area size is a discriminator for the damage measurement mode:
+        # 0.0 means a single/local damage; > 0.0 means a radial damage area.
+        CheckConstraint(
+            "radial_area_size >= 0",
+            name="ck_damages_radial_area_size_non_negative",
+        ),
+        # Size is only used for single/local damages and is forced to 0.0 for
+        # radial area damages by ck_damages_single_or_area_measurements below.
+        CheckConstraint("size >= 0", name="ck_damages_size_non_negative"),
+        # Density is stored as percent. Single/local damages must have density
+        # 0.0; radial area damages may use 0.0 <= density < 100.0.
+        CheckConstraint(
+            "density >= 0 AND density < 100",
+            name="ck_damages_density_percentage_range",
+        ),
+        # Enforce exactly one measurement mode:
+        # - single/local damage: radial_area_size = 0.0, size > 0.0, density = 0.0
+        # - radial area damage: radial_area_size > 0.0, size = 0.0,
+        #   density is a percentage constrained above.
+        CheckConstraint(
+            "((radial_area_size = 0 AND size > 0 AND density = 0) OR "
+            "(radial_area_size > 0 AND size = 0))",
+            name="ck_damages_single_or_area_measurements",
+        ),
+    )
 
     damage_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     blade_id: Mapped[int] = mapped_column(
@@ -214,10 +240,26 @@ class Damage(Base):
         nullable=False,
     )
     radial_position: Mapped[float] = mapped_column(Float, nullable=False)
-    radial_area_size: Mapped[float] = mapped_column(Float, nullable=False)
-    size: Mapped[float] = mapped_column(Float, nullable=False)
-    density: Mapped[float] = mapped_column(Float, nullable=False)
-    orientation: Mapped[float] = mapped_column(Float, nullable=False)
+    radial_area_size: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Radial damage area size [m]; 0.0 means a single/local damage.",
+    )
+    size: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Single/local damage size [m]; must be 0.0 for radial area damages.",
+    )
+    density: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Damage area density [%]; must be 0.0 for single/local damages.",
+    )
+    orientation: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Damage orientation [degrees].",
+    )
     photo: Mapped[str] = mapped_column(String(1024), nullable=False)
     inspection_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     analyzer_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
