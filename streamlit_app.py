@@ -35,6 +35,11 @@ DEFAULT_APP_DATABASE_URL = "sqlite:///aquada_bdm_streamlit.db"
 MOBILE_BREAKPOINT_PX = 1100
 RADIAL_HISTOGRAM_BIN_SIZE_M = 1.0
 DAMAGE_PHOTO_DIRECTORY = os.path.join("examples", "Wind Farm Inspection", "photos")
+SEVERITY_COLORS = {
+    SeverityType.CRITICAL.value: "#d62728",
+    SeverityType.TO_REPAIR.value: "#ff9f1c",
+    SeverityType.COSMETIC.value: "#2ca02c",
+}
 
 
 def dismiss_edit_wind_farm_dialog() -> None:
@@ -345,6 +350,47 @@ def wind_farm_damage_radial_dataframe(
             for severity, radial_position, radial_area_size, size, orientation in rows
         ]
     )
+
+
+def wind_farm_damage_type_counts(session: Session, wind_farm_id: int) -> dict[str, int]:
+    stmt = (
+        select(Damage.damage_type, func.count(Damage.damage_id))
+        .join(Blade, Damage.blade_id == Blade.blade_id)
+        .join(Turbine, Blade.wtg_id == Turbine.wtg_id)
+        .where(Turbine.wind_farm_id == wind_farm_id)
+        .group_by(Damage.damage_type)
+    )
+    counts = {
+        (
+            damage_type.value
+            if isinstance(damage_type, DamageType)
+            else str(damage_type)
+        ): int(count)
+        for damage_type, count in session.execute(stmt).all()
+    }
+    return {
+        damage_type.value: counts.get(damage_type.value, 0)
+        for damage_type in DamageType
+    }
+
+
+def wind_farm_damage_severity_counts(
+    session: Session, wind_farm_id: int
+) -> dict[str, int]:
+    stmt = (
+        select(Damage.severity, func.count(Damage.damage_id))
+        .join(Blade, Damage.blade_id == Blade.blade_id)
+        .join(Turbine, Blade.wtg_id == Turbine.wtg_id)
+        .where(Turbine.wind_farm_id == wind_farm_id)
+        .group_by(Damage.severity)
+    )
+    counts = {
+        (severity.value if isinstance(severity, SeverityType) else str(severity)): int(
+            count
+        )
+        for severity, count in session.execute(stmt).all()
+    }
+    return {severity.value: counts.get(severity.value, 0) for severity in SeverityType}
 
 
 def damages_dataframe(session: Session, wtg_id: int) -> pd.DataFrame:
@@ -1927,11 +1973,27 @@ def render_wind_farm_radial_damage_histogram(
     for severity in severity_order:
         severity_df = binned_histogram_df[binned_histogram_df["severity"] == severity]
         if not isinstance(severity_df, pd.DataFrame):
-            fig.add_trace(go.Bar(x=[], y=[], name=severity, opacity=0.75))
+            fig.add_trace(
+                go.Bar(
+                    x=[],
+                    y=[],
+                    name=severity,
+                    marker_color=SEVERITY_COLORS[severity],
+                    opacity=0.75,
+                )
+            )
             continue
         counts = severity_df.groupby("radial_bin_start_m").size()
         if counts.empty:
-            fig.add_trace(go.Bar(x=[], y=[], name=severity, opacity=0.75))
+            fig.add_trace(
+                go.Bar(
+                    x=[],
+                    y=[],
+                    name=severity,
+                    marker_color=SEVERITY_COLORS[severity],
+                    opacity=0.75,
+                )
+            )
             continue
 
         bin_starts = [float(bin_start) for bin_start in counts.index]
@@ -1956,6 +2018,7 @@ def render_wind_farm_radial_damage_histogram(
                     "Radial position: %{customdata[1]:.1f}–%{customdata[2]:.1f} m<br>"
                     "Damage count: %{y}<extra></extra>"
                 ),
+                marker_color=SEVERITY_COLORS[severity],
                 opacity=0.75,
             )
         )
@@ -2575,6 +2638,171 @@ def remove_turbine_dialog(session: Session) -> None:
             st.rerun()
 
 
+def render_turbines_overview_section(
+    turbines_df: pd.DataFrame,
+    damage_type_counts: dict[str, int],
+    damage_severity_counts: dict[str, int],
+) -> None:
+    total_turbines = len(turbines_df)
+    if turbines_df.empty:
+        turbines_with_damages = 0
+        total_damages = 0
+    else:
+        turbines_with_damages = int((turbines_df["damage_count"] > 0).sum())
+        total_damages = int(turbines_df["damage_count"].sum())  # type: ignore
+
+    turbine_damage_percent = (
+        (turbines_with_damages / total_turbines) * 100 if total_turbines else 0.0
+    )
+
+    damage_type_rows = "".join(
+        "<div class='turbine-overview-damage-type-row'>"
+        "<div class='turbine-overview-row-header'>"
+        f"<span>{html.escape(damage_type)}</span>"
+        f"<strong>{((count / total_damages) * 100 if total_damages else 0.0):.1f}%</strong>"
+        "</div>"
+        "<div class='turbine-overview-mini-progress'>"
+        f"<div style='width: {((count / total_damages) * 100 if total_damages else 0.0):.2f}%;'></div>"
+        "</div>"
+        "</div>"
+        for damage_type, count in damage_type_counts.items()
+    )
+
+    severity_total = sum(damage_severity_counts.values())
+    severity_bar_segments = "".join(
+        f"<div title='{html.escape(severity)}: {count}' "
+        f"style='width: {((count / severity_total) * 100 if severity_total else 0.0):.2f}%; "
+        f"background: {SEVERITY_COLORS[severity]};'></div>"
+        for severity, count in damage_severity_counts.items()
+        if count > 0
+    )
+    severity_legend_rows = "".join(
+        "<div class='turbine-overview-severity-legend-row'>"
+        f"<span><i style='background: {SEVERITY_COLORS[severity]};'></i>{html.escape(severity)}</span>"
+        f"<strong>{((count / severity_total) * 100 if severity_total else 0.0):.1f}%</strong>"
+        "</div>"
+        for severity, count in damage_severity_counts.items()
+    )
+
+    st.markdown(
+        """
+        <style>
+            .turbine-overview-card {
+                border: 1px solid rgba(49, 51, 63, 0.16);
+                border-radius: 0.5rem;
+                padding: 1rem;
+                min-height: 100%;
+                background: rgba(49, 51, 63, 0.02);
+            }
+            .turbine-overview-main-value {
+                font-size: 1.7rem;
+                font-weight: 700;
+                line-height: 1.2;
+            }
+            .turbine-overview-progress-label,
+            .turbine-overview-row-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                margin-bottom: 0.35rem;
+            }
+            .turbine-overview-progress-track,
+            .turbine-overview-mini-progress {
+                width: 100%;
+                overflow: hidden;
+                border-radius: 999px;
+                background: rgba(49, 51, 63, 0.12);
+            }
+            .turbine-overview-progress-track {
+                height: 0.9rem;
+            }
+            .turbine-overview-progress-track > div,
+            .turbine-overview-mini-progress > div {
+                height: 100%;
+                border-radius: inherit;
+                background: rgb(255, 75, 75);
+            }
+            .turbine-overview-progress-percent {
+                margin-top: 0.3rem;
+                color: rgba(49, 51, 63, 0.68);
+                font-size: 0.9rem;
+                text-align: right;
+            }
+            .turbine-overview-damage-type-row,
+            .turbine-overview-severity-section {
+                margin-top: 0.55rem;
+            }
+            .turbine-overview-mini-progress {
+                height: 0.45rem;
+            }
+            .turbine-overview-severity-bar {
+                display: flex;
+                width: 100%;
+                height: 1rem;
+                overflow: hidden;
+                border-radius: 999px;
+                background: rgba(49, 51, 63, 0.12);
+            }
+            .turbine-overview-severity-bar > div {
+                height: 100%;
+            }
+            .turbine-overview-severity-legend-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.75rem;
+                margin-top: 0.35rem;
+                font-size: 0.9rem;
+            }
+            .turbine-overview-severity-legend-row span {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+            }
+            .turbine-overview-severity-legend-row i {
+                display: inline-block;
+                width: 0.7rem;
+                height: 0.7rem;
+                border-radius: 999px;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    turbine_summary_column, damages_column = st.columns([2, 2])
+    with turbine_summary_column:
+        st.markdown(
+            "<div class='turbine-overview-card'>"
+            f"<div class='turbine-overview-main-value'>{total_turbines} Turbines</div>"
+            "<div class='turbine-overview-damage-type-row'>"
+            "<div class='turbine-overview-progress-label'>"
+            "<span>Turbines with Damages</span>"
+            f"<strong>{turbines_with_damages} | {total_turbines}</strong>"
+            "</div>"
+            "<div class='turbine-overview-progress-track'>"
+            f"<div style='width: {turbine_damage_percent:.2f}%;'></div>"
+            "</div>"
+            f"<div class='turbine-overview-progress-percent'>{turbine_damage_percent:.1f}%</div>"
+            "</div>"
+            "<div class='turbine-overview-severity-section'>"
+            "<div class='turbine-overview-progress-label'>"
+            "<span>Damage Severity Distribution</span>"
+            "</div>"
+            f"<div class='turbine-overview-severity-bar'>{severity_bar_segments}</div>"
+            f"{severity_legend_rows}"
+            "</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with damages_column:
+        st.markdown(
+            f"<div class='turbine-overview-card'><div class='turbine-overview-main-value'>{total_damages} Damages</div>{damage_type_rows}</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def show_turbines_page(session: Session) -> None:
     farm = session.get(WindFarm, st.session_state.wind_farm_id)
     if farm is None:
@@ -2607,6 +2835,21 @@ def show_turbines_page(session: Session) -> None:
         ):
             st.session_state.remove_turbine_wind_farm_id = farm.id
             st.session_state.pop("add_turbines_wind_farm_id", None)
+        st.markdown(
+            "<div style='border-left: 1px solid rgba(49, 51, 63, 0.25); height: 2.4rem;'></div>",
+            unsafe_allow_html=True,
+        )
+        st.button("Add Inspection Data", key="add_inspection_data_button")
+
+    st.divider()
+
+    st.subheader("Damage Overview")
+    render_turbines_overview_section(
+        turbines_df,
+        wind_farm_damage_type_counts(session, farm.id),
+        wind_farm_damage_severity_counts(session, farm.id),
+    )
+    st.divider()
 
     if st.session_state.get("add_turbines_wind_farm_id") == farm.id:
         add_turbines_dialog(session)
@@ -2617,6 +2860,7 @@ def show_turbines_page(session: Session) -> None:
         st.info("No turbines are defined for this wind farm yet.")
         return
 
+    st.subheader("Wind Park Layout")
     fig = px.scatter(
         turbines_df,
         x="coord_x",
@@ -2650,6 +2894,7 @@ def show_turbines_page(session: Session) -> None:
         key="turbine_scatter",
     )
     st.caption("*The XY coordinates are in projection UTM 32 Euref89.*")
+    st.divider()
 
     st.subheader("Damage severity distribution from root to tip")
     radial_damage_df = wind_farm_damage_radial_dataframe(session, farm.id)
