@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import html
 import math
+import numbers
 import os
 import random
+from collections import Counter
 from datetime import date
 from typing import Any
 
@@ -2009,6 +2011,479 @@ def selected_histogram_bin(
     return None
 
 
+TURBINE_EXCEL_COLUMNS = [
+    "WTGID",
+    "WT Installation Number",
+    "Coord. X",
+    "Coord. Y",
+    "Blade ID 1",
+    "Blade ID 2",
+    "Blade ID 3",
+]
+MIN_TURBINE_DISTANCE_M = 150.0
+
+
+def duplicate_values(values: list[Any]) -> list[Any]:
+    """Return duplicate values while preserving their first duplicate order."""
+    counts = Counter(values)
+    return [value for value, count in counts.items() if count > 1]
+
+
+def parse_excel_integer(
+    value: Any, row_label: str, column_name: str, errors: list[str]
+) -> int | None:
+    """Parse an Excel cell as an integer and collect validation errors."""
+    if pd.isna(value) or isinstance(value, bool):
+        errors.append(f"{row_label}: {column_name} must be an integer.")
+        return None
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real) and float(value).is_integer():
+        return int(value)  # type: ignore
+    errors.append(f"{row_label}: {column_name} must be an integer.")
+    return None
+
+
+def parse_excel_float(
+    value: Any, row_label: str, column_name: str, errors: list[str]
+) -> float | None:
+    """Parse an Excel cell as a finite float and collect validation errors."""
+    if pd.isna(value) or isinstance(value, bool) or not isinstance(value, numbers.Real):
+        errors.append(f"{row_label}: {column_name} must be a float.")
+        return None
+    float_value = float(value)
+    if not math.isfinite(float_value):
+        errors.append(f"{row_label}: {column_name} must be a finite float.")
+        return None
+    return float_value
+
+
+def parse_excel_string(
+    value: Any, row_label: str, column_name: str, errors: list[str]
+) -> str | None:
+    """Parse an Excel cell as a non-empty string and collect validation errors."""
+    if pd.isna(value) or not isinstance(value, str) or not value.strip():
+        errors.append(f"{row_label}: {column_name} must be a non-empty string.")
+        return None
+    return value.strip()
+
+
+def validate_turbines_excel_upload(
+    session: Session,
+    uploaded_file: Any,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate an uploaded turbine Excel file and return parsed turbine records."""
+    errors: list[str] = []
+    records: list[dict[str, Any]] = []
+
+    try:
+        uploaded_file.seek(0)
+        excel_file = pd.ExcelFile(uploaded_file)
+    except Exception as exc:
+        return [], [f"Could not read Excel file: {exc}"]
+
+    if "Turbines" not in excel_file.sheet_names:
+        return [], ["Excel file must contain a sheet named 'Turbines'."]
+
+    try:
+        df = pd.read_excel(excel_file, sheet_name="Turbines")
+    except Exception as exc:
+        return [], [f"Could not read the 'Turbines' sheet: {exc}"]
+
+    if list(df.columns) != TURBINE_EXCEL_COLUMNS:
+        return [], [
+            "The 'Turbines' sheet must have exactly these columns in this order: "
+            + ", ".join(TURBINE_EXCEL_COLUMNS)
+        ]
+
+    if df.empty:
+        return [], ["The 'Turbines' sheet is empty."]
+
+    for row_index, row in df.iterrows():
+        row_label = f"Row {row_index + 2}"  # type: ignore
+        wtg_id = parse_excel_integer(row["WTGID"], row_label, "WTGID", errors)
+        installation_number = parse_excel_string(
+            row["WT Installation Number"],
+            row_label,
+            "WT Installation Number",
+            errors,
+        )
+        coord_x = parse_excel_float(row["Coord. X"], row_label, "Coord. X", errors)
+        coord_y = parse_excel_float(row["Coord. Y"], row_label, "Coord. Y", errors)
+        blade_ids = [
+            parse_excel_integer(row[column_name], row_label, column_name, errors)
+            for column_name in ["Blade ID 1", "Blade ID 2", "Blade ID 3"]
+        ]
+
+        parsed_blade_ids = [blade_id for blade_id in blade_ids if blade_id is not None]
+        if len(parsed_blade_ids) == 3 and len(set(parsed_blade_ids)) != 3:
+            errors.append(f"{row_label}: Blade IDs must be different integers.")
+
+        if (
+            wtg_id is not None
+            and installation_number is not None
+            and coord_x is not None
+            and coord_y is not None
+            and len(parsed_blade_ids) == 3
+        ):
+            records.append(
+                {
+                    "row_label": row_label,
+                    "wtg_id": wtg_id,
+                    "wt_installation_number": installation_number,
+                    "coord_x": coord_x,
+                    "coord_y": coord_y,
+                    "blade_ids": parsed_blade_ids,
+                }
+            )
+
+    if errors:
+        return [], errors
+
+    duplicate_wtg_ids = duplicate_values([record["wtg_id"] for record in records])
+    if duplicate_wtg_ids:
+        errors.append(
+            "WTGID values must be unique in the file: "
+            + ", ".join(str(value) for value in duplicate_wtg_ids)
+        )
+
+    duplicate_installation_numbers = duplicate_values(
+        [record["wt_installation_number"] for record in records]
+    )
+    if duplicate_installation_numbers:
+        errors.append(
+            "WT Installation Number values must be unique in the file: "
+            + ", ".join(str(value) for value in duplicate_installation_numbers)
+        )
+
+    all_blade_ids = [blade_id for record in records for blade_id in record["blade_ids"]]
+    duplicate_blade_ids = duplicate_values(all_blade_ids)
+    if duplicate_blade_ids:
+        errors.append(
+            "Blade IDs must be unique in the file: "
+            + ", ".join(str(value) for value in duplicate_blade_ids)
+        )
+
+    wtg_ids = [record["wtg_id"] for record in records]
+    existing_wtg_ids = set(
+        session.scalars(select(Turbine.wtg_id).where(Turbine.wtg_id.in_(wtg_ids))).all()
+    )
+    if existing_wtg_ids:
+        errors.append(
+            "WTGID values already exist in the database: "
+            + ", ".join(str(value) for value in sorted(existing_wtg_ids))
+        )
+
+    installation_numbers = [record["wt_installation_number"] for record in records]
+    existing_installation_numbers = set(
+        session.scalars(
+            select(Turbine.wt_installation_number).where(
+                Turbine.wt_installation_number.in_(installation_numbers)
+            )
+        ).all()
+    )
+    if existing_installation_numbers:
+        errors.append(
+            "WT Installation Number values already exist in the database: "
+            + ", ".join(str(value) for value in sorted(existing_installation_numbers))
+        )
+
+    existing_blade_ids = set(
+        session.scalars(
+            select(Blade.blade_id).where(Blade.blade_id.in_(all_blade_ids))
+        ).all()
+    )
+    if existing_blade_ids:
+        errors.append(
+            "Blade IDs already exist in the database: "
+            + ", ".join(str(value) for value in sorted(existing_blade_ids))
+        )
+
+    existing_turbines = session.scalars(select(Turbine)).all()
+    for record in records:
+        too_close_existing = [
+            (
+                turbine.wt_installation_number,
+                math.hypot(
+                    record["coord_x"] - float(turbine.coord_x),
+                    record["coord_y"] - float(turbine.coord_y),
+                ),
+            )
+            for turbine in existing_turbines
+        ]
+        if too_close_existing:
+            closest_installation_number, closest_distance = min(
+                too_close_existing,
+                key=lambda item: item[1],
+            )
+            if closest_distance <= MIN_TURBINE_DISTANCE_M:
+                errors.append(
+                    f"{record['row_label']}: coordinate pair must be more than "
+                    f"{MIN_TURBINE_DISTANCE_M:.0f} m from every existing turbine. "
+                    f"Closest turbine is {closest_installation_number} at "
+                    f"{closest_distance:.1f} m."
+                )
+
+    for index, record in enumerate(records):
+        for other_record in records[index + 1 :]:
+            distance = math.hypot(
+                record["coord_x"] - other_record["coord_x"],
+                record["coord_y"] - other_record["coord_y"],
+            )
+            if distance <= MIN_TURBINE_DISTANCE_M:
+                errors.append(
+                    f"{record['row_label']} and {other_record['row_label']}: "
+                    f"coordinate pairs must be more than {MIN_TURBINE_DISTANCE_M:.0f} m "
+                    f"apart. Distance is {distance:.1f} m."
+                )
+
+    return ([] if errors else records), errors
+
+
+@st.dialog("Add turbine(s)", width="medium")
+def add_turbines_dialog(session: Session) -> None:
+    """Add turbines to the current wind farm."""
+    wind_farm_id = st.session_state.get("add_turbines_wind_farm_id")
+    farm = session.get(WindFarm, wind_farm_id) if wind_farm_id is not None else None
+
+    if farm is None:
+        st.error("Wind farm not found.")
+        if st.button("Close"):
+            st.session_state.pop("add_turbines_wind_farm_id", None)
+            st.rerun()
+        return
+
+    next_wtg_id = int(session.scalar(select(func.max(Turbine.wtg_id))) or 0) + 1
+
+    input_tab, excel_tab = st.tabs(["By Input Form", "By Excel"])
+
+    with input_tab:
+        st.caption(f"Wind farm: {farm.park_name}")
+        with st.form(f"add_single_turbine_form_{farm.id}", enter_to_submit=False):
+            wtg_id_col, wt_installation_number_col = st.columns(2)
+            wtg_id = wtg_id_col.number_input(
+                "Wind Turbine ID",
+                min_value=1,
+                value=next_wtg_id,
+                step=1,
+                format="%d",
+            )
+            wt_installation_number = wt_installation_number_col.text_input(
+                "WT installation number"
+            )
+
+            coord_x_col, coord_y_col = st.columns(2)
+            coord_x = coord_x_col.number_input(
+                "Coord X [m]", value=0.0, step=1.0, format="%.3f"
+            )
+            coord_y = coord_y_col.number_input(
+                "Coord Y [m]", value=0.0, step=1.0, format="%.3f"
+            )
+
+            st.markdown("##### Blade IDs")
+            blade_columns = st.columns(3)
+            blade_ids = [
+                column.number_input(
+                    f"Blade {blade_number} ID",
+                    min_value=1,
+                    value=int(wtg_id) * 100 + blade_number,
+                    step=1,
+                    format="%d",
+                )
+                for blade_number, column in enumerate(blade_columns, start=1)
+            ]
+
+            add_col, cancel_col = st.columns(2)
+            add = add_col.form_submit_button(
+                "Add Turbine", type="primary", width="stretch"
+            )
+            cancel = cancel_col.form_submit_button("Cancel", width="stretch")
+
+        if cancel:
+            st.session_state.pop("add_turbines_wind_farm_id", None)
+            st.rerun()
+
+        if add:
+            errors: list[str] = []
+            wtg_id_int = int(wtg_id)
+            blade_id_values = [int(blade_id) for blade_id in blade_ids]
+            installation_number = wt_installation_number.strip()
+            coord_x_float = float(coord_x)
+            coord_y_float = float(coord_y)
+
+            if session.get(Turbine, wtg_id_int) is not None:
+                errors.append("Wind Turbine ID must not already be in the database.")
+
+            if not installation_number:
+                errors.append("WT installation number must be a non-empty string.")
+            elif (
+                session.scalar(
+                    select(Turbine.wtg_id).where(
+                        Turbine.wt_installation_number == installation_number
+                    )
+                )
+                is not None
+            ):
+                errors.append(
+                    "WT installation number must not already be in the database."
+                )
+
+            if not math.isfinite(coord_x_float) or not math.isfinite(coord_y_float):
+                errors.append("Coordinates must be finite float values.")
+
+            if len(set(blade_id_values)) != len(blade_id_values):
+                errors.append("Blade IDs must be different integers.")
+
+            existing_blade_ids = set(
+                session.scalars(
+                    select(Blade.blade_id).where(Blade.blade_id.in_(blade_id_values))
+                ).all()
+            )
+            if existing_blade_ids:
+                errors.append(
+                    "Blade IDs must not already be in the database: "
+                    + ", ".join(
+                        str(blade_id) for blade_id in sorted(existing_blade_ids)
+                    )
+                )
+
+            existing_turbines = session.scalars(select(Turbine)).all()
+            too_close_turbines = [
+                (
+                    turbine.wt_installation_number,
+                    math.hypot(
+                        coord_x_float - float(turbine.coord_x),
+                        coord_y_float - float(turbine.coord_y),
+                    ),
+                )
+                for turbine in existing_turbines
+            ]
+            if too_close_turbines:
+                closest_installation_number, closest_distance = min(
+                    too_close_turbines, key=lambda item: item[1]
+                )
+                if closest_distance <= 150.0:
+                    errors.append(
+                        "Coordinate pair must be more than 150 m from every existing "
+                        f"turbine. Closest turbine is {closest_installation_number} "
+                        f"at {closest_distance:.1f} m."
+                    )
+
+            if errors:
+                for error in errors:
+                    st.error(error)
+                return
+
+            try:
+                turbine = Turbine(
+                    wtg_id=wtg_id_int,
+                    wind_farm_id=farm.id,
+                    wt_installation_number=installation_number,
+                    coord_x=coord_x_float,
+                    coord_y=coord_y_float,
+                )
+                turbine.blades = [
+                    Blade(blade_id=blade_id) for blade_id in blade_id_values
+                ]
+                session.add(turbine)
+                session.commit()
+                st.session_state.pop("add_turbines_wind_farm_id", None)
+                st.session_state.turbine_success_message = (
+                    f"Added turbine: {installation_number}"
+                )
+                st.rerun()
+            except IntegrityError:
+                session.rollback()
+                st.error("A turbine or blade with one of those IDs already exists.")
+            except SQLAlchemyError as exc:
+                session.rollback()
+                st.error(f"Could not add turbine: {exc}")
+
+    with excel_tab:
+        st.caption(f"Wind farm: {farm.park_name}")
+        st.markdown(
+            """
+            Upload an Excel file with a sheet named **Turbines**.
+
+            Columns must be:
+            **WTGID**, **WT Installation Number**, **Coord. X**, **Coord. Y**,
+            **Blade ID 1**, **Blade ID 2**, **Blade ID 3**.
+
+            IDs must be unique integers, installation numbers must be unique strings,
+            and coordinates must be floats in meters `[m]`.
+            """
+        )
+        example_excel_df = pd.DataFrame(
+            [
+                {
+                    "WTGID": 51,
+                    "WT Installation Number": "WT-051",
+                    "Coord. X": 1250.0,
+                    "Coord. Y": 4356.8,
+                    "Blade ID 1": 5101,
+                    "Blade ID 2": 5102,
+                    "Blade ID 3": 5103,
+                }
+            ]
+        )
+        st.table(
+            example_excel_df.style.format({"Coord. X": "{:.1f}", "Coord. Y": "{:.1f}"})
+        )
+        uploaded_file = st.file_uploader(
+            "Upload Excel file",
+            type=["xlsx", "xls"],
+            key=f"add_turbines_excel_upload_{farm.id}",
+        )
+        if uploaded_file is not None:
+            st.info(f"Selected file: {uploaded_file.name}")
+
+        add_excel_col, cancel_excel_col = st.columns(2)
+        if add_excel_col.button("Add Turbines", type="primary", width="stretch"):
+            if uploaded_file is None:
+                st.error("Please upload an Excel file before adding turbines.")
+            else:
+                turbine_records, errors = validate_turbines_excel_upload(
+                    session,
+                    uploaded_file,
+                )
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    try:
+                        turbines = []
+                        for record in turbine_records:
+                            turbine = Turbine(
+                                wtg_id=record["wtg_id"],
+                                wind_farm_id=farm.id,
+                                wt_installation_number=record["wt_installation_number"],
+                                coord_x=record["coord_x"],
+                                coord_y=record["coord_y"],
+                            )
+                            turbine.blades = [
+                                Blade(blade_id=blade_id)
+                                for blade_id in record["blade_ids"]
+                            ]
+                            turbines.append(turbine)
+
+                        session.add_all(turbines)
+                        session.commit()
+                        st.session_state.pop("add_turbines_wind_farm_id", None)
+                        st.session_state.turbine_success_message = f"Added {len(turbines)} turbine(s) from {uploaded_file.name}"
+                        st.rerun()
+                    except IntegrityError:
+                        session.rollback()
+                        st.error(
+                            "A turbine, installation number, or blade ID already exists."
+                        )
+                    except SQLAlchemyError as exc:
+                        session.rollback()
+                        st.error(f"Could not add turbines: {exc}")
+        if cancel_excel_col.button("Cancel", width="stretch"):
+            st.session_state.pop("add_turbines_wind_farm_id", None)
+            st.rerun()
+
+
 @st.dialog("Remove turbine", icon="⚠️")
 def remove_turbine_dialog(session: Session) -> None:
     """Select and delete a turbine from the current wind farm."""
@@ -2090,14 +2565,19 @@ def show_turbines_page(session: Session) -> None:
     turbines_df = turbines_dataframe(session, farm.id)
 
     with st.container(horizontal=True, gap="small"):
-        st.button("Add Turbine(s)", key="add_turbines_button")
+        if st.button("Add Turbine(s)", key="add_turbines_button"):
+            st.session_state.add_turbines_wind_farm_id = farm.id
+            st.session_state.pop("remove_turbine_wind_farm_id", None)
         if st.button(
             "Remove Turbine",
             key="remove_turbine_button",
             disabled=turbines_df.empty,
         ):
             st.session_state.remove_turbine_wind_farm_id = farm.id
+            st.session_state.pop("add_turbines_wind_farm_id", None)
 
+    if st.session_state.get("add_turbines_wind_farm_id") == farm.id:
+        add_turbines_dialog(session)
     if st.session_state.get("remove_turbine_wind_farm_id") == farm.id:
         remove_turbine_dialog(session)
 
