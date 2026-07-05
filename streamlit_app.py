@@ -37,6 +37,26 @@ RADIAL_HISTOGRAM_BIN_SIZE_M = 1.0
 DAMAGE_PHOTO_DIRECTORY = os.path.join("examples", "Wind Farm Inspection", "photos")
 
 
+def dismiss_edit_wind_farm_dialog() -> None:
+    """Clear edit wind farm dialog state after dismissing the modal."""
+    st.session_state.pop("edit_wind_farm_id", None)
+
+
+def dismiss_delete_wind_farm_dialog() -> None:
+    """Clear delete wind farm dialog state after dismissing the modal."""
+    st.session_state.pop("delete_wind_farm_id", None)
+
+
+def dismiss_add_turbines_dialog() -> None:
+    """Clear add turbine dialog state after dismissing the modal."""
+    st.session_state.pop("add_turbines_wind_farm_id", None)
+
+
+def dismiss_remove_turbine_dialog() -> None:
+    """Clear remove turbine dialog state after dismissing the modal."""
+    st.session_state.pop("remove_turbine_wind_farm_id", None)
+
+
 def available_damage_photo_paths() -> list[str]:
     """Return existing damage photo paths from the example photo directory."""
     if not os.path.isdir(DAMAGE_PHOTO_DIRECTORY):
@@ -1506,7 +1526,7 @@ def render_wind_farms_table(
     return selected_farm_id, edit_farm_id, delete_farm_id
 
 
-@st.dialog("Edit wind farm")
+@st.dialog("Edit wind farm", on_dismiss=dismiss_edit_wind_farm_dialog)
 def edit_wind_farm_dialog(session: Session) -> None:
     """Edit details for a selected wind farm."""
     farm_id = st.session_state.get("edit_wind_farm_id")
@@ -1577,7 +1597,11 @@ def edit_wind_farm_dialog(session: Session) -> None:
             st.error(f"Could not update wind farm: {exc}")
 
 
-@st.dialog("Delete wind farm?", icon="⚠️")
+@st.dialog(
+    "Delete wind farm?",
+    icon="⚠️",
+    on_dismiss=dismiss_delete_wind_farm_dialog,
+)
 def confirm_delete_wind_farm_dialog(session: Session) -> None:
     """Ask for confirmation before deleting a wind farm and its children."""
     farm_id = st.session_state.get("delete_wind_farm_id")
@@ -2240,7 +2264,11 @@ def validate_turbines_excel_upload(
     return ([] if errors else records), errors
 
 
-@st.dialog("Add turbine(s)", width="medium")
+@st.dialog(
+    "Add turbine(s)",
+    width="medium",
+    on_dismiss=dismiss_add_turbines_dialog,
+)
 def add_turbines_dialog(session: Session) -> None:
     """Add turbines to the current wind farm."""
     wind_farm_id = st.session_state.get("add_turbines_wind_farm_id")
@@ -2484,7 +2512,11 @@ def add_turbines_dialog(session: Session) -> None:
             st.rerun()
 
 
-@st.dialog("Remove turbine", icon="⚠️")
+@st.dialog(
+    "Remove turbine",
+    icon="⚠️",
+    on_dismiss=dismiss_remove_turbine_dialog,
+)
 def remove_turbine_dialog(session: Session) -> None:
     """Select and delete a turbine from the current wind farm."""
     wind_farm_id = st.session_state.get("remove_turbine_wind_farm_id")
