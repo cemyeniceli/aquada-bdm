@@ -70,6 +70,7 @@ class CSPosition(str, enum.Enum):
     TE_AREA = "TE Area"
     TE_PRESSURE = "TE Pressure"
     TE_SUCTION = "TE Suction"
+    UNDEFINED = "Undefined"
 
 
 class WindFarm(Base):

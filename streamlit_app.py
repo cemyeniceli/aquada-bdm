@@ -6,7 +6,7 @@ import numbers
 import os
 import random
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -55,6 +55,11 @@ def dismiss_delete_wind_farm_dialog() -> None:
 def dismiss_add_turbines_dialog() -> None:
     """Clear add turbine dialog state after dismissing the modal."""
     st.session_state.pop("add_turbines_wind_farm_id", None)
+
+
+def dismiss_add_inspection_data_dialog() -> None:
+    """Clear add inspection data dialog state after dismissing the modal."""
+    st.session_state.pop("add_inspection_data_wind_farm_id", None)
 
 
 def dismiss_remove_turbine_dialog() -> None:
@@ -2327,6 +2332,515 @@ def validate_turbines_excel_upload(
     return ([] if errors else records), errors
 
 
+INSPECTION_EXCEL_COLUMNS = [
+    "Inspection date",
+    "Engineer",
+    "Blade number",
+    "Severity",
+    "Type",
+    "Depth",
+    "Damage area cross-section position",
+    "Damage area radial position, m",
+    "Damage area radial size, m",
+    "Damage size,m",
+    "Damage density, %",
+    "Damage orientation, deg.",
+    "Damage photo #",
+    "Inspection comment",
+    "Analyser comment",
+]
+INSPECTION_EXCEL_OPTIONAL_COLUMNS = ["Inspection comment", "Analyser comment"]
+INSPECTION_EXCEL_REQUIRED_COLUMNS = [
+    column
+    for column in INSPECTION_EXCEL_COLUMNS
+    if column not in INSPECTION_EXCEL_OPTIONAL_COLUMNS
+]
+INSPECTION_EXCEL_COLUMN_ALIASES = {
+    "Inspection date": ["Inspection Date"],
+    "Damage area radial position, m": [
+        "Damage area radial position,m",
+        "Damage radial position, m",
+    ],
+    "Damage area radial size, m": [
+        "Damage area radial size,m",
+        "Damage radial size, m",
+    ],
+    "Damage size,m": ["Damage size, m"],
+    "Damage photo #": ["Damage photo", "Damage photo path", "Damage photo Path"],
+    "Analyser comment": ["Analyzer comment"],
+}
+
+
+def normalize_excel_column_name(column_name: Any) -> str:
+    """Normalize an Excel column name for tolerant matching."""
+    return " ".join(str(column_name).strip().split()).casefold()
+
+
+def canonical_inspection_column_lookup() -> dict[str, str]:
+    """Return normalized inspection Excel column names mapped to canonical names."""
+    lookup: dict[str, str] = {}
+    for column_name in INSPECTION_EXCEL_COLUMNS:
+        lookup[normalize_excel_column_name(column_name)] = column_name
+        for alias in INSPECTION_EXCEL_COLUMN_ALIASES.get(column_name, []):
+            lookup[normalize_excel_column_name(alias)] = column_name
+    return lookup
+
+
+def canonicalize_inspection_dataframe_columns(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Rename recognized upload columns to canonical inspection names."""
+    errors: list[str] = []
+    lookup = canonical_inspection_column_lookup()
+    rename_map: dict[Any, str] = {}
+    seen_canonical_columns: dict[str, Any] = {}
+
+    for column_name in df.columns:
+        normalized_column_name = normalize_excel_column_name(column_name)
+        if normalized_column_name not in lookup:
+            continue
+        canonical_column_name = lookup[normalized_column_name]
+        if canonical_column_name in seen_canonical_columns:
+            errors.append(
+                "Duplicate column for "
+                f"{canonical_column_name!r}: {seen_canonical_columns[canonical_column_name]!r} "
+                f"and {column_name!r}."
+            )
+            continue
+        seen_canonical_columns[canonical_column_name] = column_name
+        rename_map[column_name] = canonical_column_name
+
+    return df.rename(columns=rename_map), errors
+
+
+def parse_excel_date(
+    value: Any,
+    row_label: str,
+    column_name: str,
+    errors: list[str],
+) -> date | None:
+    """Parse an Excel cell as a date and collect validation errors."""
+    if pd.isna(value):
+        errors.append(f"{row_label}: {column_name} must be a valid date.")
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, pd.Timestamp):
+        return value.date()
+    if isinstance(value, str) and value.strip():
+        parsed_value = pd.to_datetime(value.strip(), errors="coerce")
+        if pd.notna(parsed_value):
+            return parsed_value.date()
+    errors.append(f"{row_label}: {column_name} must be a valid date.")
+    return None
+
+
+def parse_optional_excel_string(
+    value: Any,
+    row_label: str,
+    column_name: str,
+    errors: list[str],
+) -> str | None:
+    """Parse an optional Excel string cell and collect validation errors."""
+    if pd.isna(value) or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        errors.append(f"{row_label}: {column_name} must be a string when provided.")
+        return None
+    return value.strip()
+
+
+def parse_excel_enum_value(
+    value: Any,
+    row_label: str,
+    column_name: str,
+    enum_class: type[Any],
+    errors: list[str],
+) -> Any | None:
+    """Parse an Excel cell as a member of a string-valued enum."""
+    parsed_value = parse_excel_string(value, row_label, column_name, errors)
+    if parsed_value is None:
+        return None
+
+    enum_members = list(enum_class)
+    value_lookup = {member.value: member for member in enum_members}
+    if parsed_value in value_lookup:
+        return value_lookup[parsed_value]
+
+    casefold_lookup = {member.value.casefold(): member for member in enum_members}
+    if parsed_value.casefold() in casefold_lookup:
+        return casefold_lookup[parsed_value.casefold()]
+
+    errors.append(
+        f"{row_label}: {column_name} must be one of: "
+        + ", ".join(member.value for member in enum_members)
+        + "."
+    )
+    return None
+
+
+def parse_excel_percentage_integer(
+    value: Any,
+    row_label: str,
+    column_name: str,
+    errors: list[str],
+) -> float | None:
+    """Parse an Excel cell as an integer percentage in the range 0..100."""
+    parsed_value = parse_excel_integer(value, row_label, column_name, errors)
+    if parsed_value is None:
+        return None
+    if not 0 <= parsed_value <= 100:
+        errors.append(f"{row_label}: {column_name} must be an integer between 0 and 100.")
+        return None
+    # The database constraint is strictly below 100. Store Excel 100 as the
+    # closest representable float below 100 so the value still behaves as 100%.
+    return min(float(parsed_value), math.nextafter(100.0, 0.0))
+
+
+def validate_inspection_excel_upload(
+    session: Session,
+    uploaded_file: Any,
+    farm: WindFarm,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate an uploaded inspection Excel file and return damage records."""
+    errors: list[str] = []
+    records: list[dict[str, Any]] = []
+
+    try:
+        uploaded_file.seek(0)
+        excel_file = pd.ExcelFile(uploaded_file)
+    except Exception as exc:
+        return [], [f"Could not read Excel file: {exc}"]
+
+    sheet_name = "Damages" if "Damages" in excel_file.sheet_names else excel_file.sheet_names[0]
+    try:
+        df = pd.read_excel(excel_file, sheet_name=sheet_name, header=1)
+    except Exception as exc:
+        return [], [f"Could not read the inspection data sheet: {exc}"]
+
+    df, column_errors = canonicalize_inspection_dataframe_columns(df)
+    errors.extend(column_errors)
+
+    missing_required_columns = [
+        column_name
+        for column_name in INSPECTION_EXCEL_REQUIRED_COLUMNS
+        if column_name not in df.columns
+    ]
+    if missing_required_columns:
+        errors.append(
+            "Missing required column(s) on Excel row 2: "
+            + ", ".join(missing_required_columns)
+        )
+    if errors:
+        return [], errors
+
+    df = df.dropna(how="all")
+    if df.empty:
+        return [], ["The inspection data sheet does not contain any data rows."]
+
+    farm_blade_ids = set(
+        session.scalars(
+            select(Blade.blade_id)
+            .join(Turbine, Blade.wtg_id == Turbine.wtg_id)
+            .where(Turbine.wind_farm_id == farm.id)
+        ).all()
+    )
+    blade_length = float(farm.blade_length)
+
+    for row_index, row in df.iterrows():
+        row_label = f"Row {row_index + 3}"  # type: ignore
+        inspection_date = parse_excel_date(
+            row["Inspection date"],
+            row_label,
+            "Inspection date",
+            errors,
+        )
+        engineer = parse_excel_string(row["Engineer"], row_label, "Engineer", errors)
+        blade_id = parse_excel_integer(
+            row["Blade number"],
+            row_label,
+            "Blade number",
+            errors,
+        )
+        severity = parse_excel_enum_value(
+            row["Severity"],
+            row_label,
+            "Severity",
+            SeverityType,
+            errors,
+        )
+        damage_type = parse_excel_enum_value(
+            row["Type"],
+            row_label,
+            "Type",
+            DamageType,
+            errors,
+        )
+        depth = parse_excel_enum_value(
+            row["Depth"],
+            row_label,
+            "Depth",
+            DepthType,
+            errors,
+        )
+        cs_position = parse_excel_enum_value(
+            row["Damage area cross-section position"],
+            row_label,
+            "Damage area cross-section position",
+            CSPosition,
+            errors,
+        )
+        radial_position = parse_excel_float(
+            row["Damage area radial position, m"],
+            row_label,
+            "Damage area radial position, m",
+            errors,
+        )
+        radial_area_size = parse_excel_float(
+            row["Damage area radial size, m"],
+            row_label,
+            "Damage area radial size, m",
+            errors,
+        )
+        damage_size = parse_excel_float(
+            row["Damage size,m"],
+            row_label,
+            "Damage size,m",
+            errors,
+        )
+        density = parse_excel_percentage_integer(
+            row["Damage density, %"],
+            row_label,
+            "Damage density, %",
+            errors,
+        )
+        orientation = parse_excel_float(
+            row["Damage orientation, deg."],
+            row_label,
+            "Damage orientation, deg.",
+            errors,
+        )
+        photo = parse_excel_string(
+            row["Damage photo #"],
+            row_label,
+            "Damage photo #",
+            errors,
+        )
+        inspection_comment = parse_optional_excel_string(
+            row["Inspection comment"] if "Inspection comment" in row else None,
+            row_label,
+            "Inspection comment",
+            errors,
+        )
+        analyzer_comment = parse_optional_excel_string(
+            row["Analyser comment"] if "Analyser comment" in row else None,
+            row_label,
+            "Analyser comment",
+            errors,
+        )
+
+        if blade_id is not None and blade_id not in farm_blade_ids:
+            errors.append(
+                f"{row_label}: Blade number {blade_id} does not exist in {farm.park_name}."
+            )
+
+        if radial_position is not None and not 0 <= radial_position < blade_length:
+            errors.append(
+                f"{row_label}: Damage area radial position must be at least 0 "
+                f"and less than the blade length ({blade_length:g} m)."
+            )
+
+        if radial_area_size is not None and radial_area_size < 0:
+            errors.append(f"{row_label}: Damage area radial size must be at least 0.")
+
+        if damage_size is not None and damage_size < 0:
+            errors.append(f"{row_label}: Damage size must be at least 0.")
+
+        if orientation is not None and not 0 <= orientation <= 360:
+            errors.append(
+                f"{row_label}: Damage orientation must be between 0 and 360 degrees."
+            )
+
+        if photo is not None:
+            photo_path = os.path.expanduser(photo)
+            if not os.path.exists(photo_path):
+                errors.append(f"{row_label}: Damage photo path does not exist: {photo!r}.")
+        else:
+            photo_path = None
+
+        if radial_area_size is not None and damage_size is not None and density is not None:
+            if radial_area_size == 0:
+                if damage_size <= 0:
+                    errors.append(
+                        f"{row_label}: Damage size must be greater than 0 when "
+                        "Damage area radial size is 0 which means it is a single damage."
+                    )
+                if density != 0:
+                    errors.append(
+                        f"{row_label}: Damage density (%) must be 0 when "
+                        "Damage area radial size is 0 which means it is a single damage."
+                    )
+            else:
+                if damage_size != 0:
+                    errors.append(
+                        f"{row_label}: Damage size must be 0 when Damage area "
+                        "radial size is greater than 0."
+                    )
+
+        if (
+            inspection_date is not None
+            and engineer is not None
+            and blade_id is not None
+            and severity is not None
+            and damage_type is not None
+            and depth is not None
+            and cs_position is not None
+            and radial_position is not None
+            and radial_area_size is not None
+            and damage_size is not None
+            and density is not None
+            and orientation is not None
+            and photo_path is not None
+        ):
+            records.append(
+                {
+                    "row_label": row_label,
+                    "blade_id": blade_id,
+                    "inspection_date": inspection_date,
+                    "inspector_name": engineer,
+                    "severity": severity,
+                    "damage_type": damage_type,
+                    "depth": depth,
+                    "cs_position": cs_position,
+                    "radial_position": radial_position,
+                    "radial_area_size": radial_area_size,
+                    "size": damage_size,
+                    "density": density,
+                    "orientation": orientation,
+                    "photo": photo_path,
+                    "inspection_comment": inspection_comment,
+                    "analyzer_comment": analyzer_comment,
+                }
+            )
+
+    return ([] if errors else records), errors
+
+
+@st.dialog(
+    "Add Inspection Data",
+    width="large",
+    on_dismiss=dismiss_add_inspection_data_dialog,
+)
+def add_inspection_data_dialog(session: Session) -> None:
+    """Upload and add inspection damage data to the current wind farm."""
+    wind_farm_id = st.session_state.get("add_inspection_data_wind_farm_id")
+    farm = session.get(WindFarm, wind_farm_id) if wind_farm_id is not None else None
+
+    if farm is None:
+        st.error("Wind farm not found.")
+        if st.button("Close"):
+            st.session_state.pop("add_inspection_data_wind_farm_id", None)
+            st.rerun()
+        return
+
+    st.subheader(f"Add Inspection Data for {farm.park_name}")
+    st.markdown(
+        f"""
+        Upload an Excel inspection record file. The app reads the **Damages** sheet
+        when present; otherwise it reads the first sheet. Column names must be on
+        **second row** and data must start on **third row**. All columns are required except
+        **Inspection comment** and **Analyser comment**.
+
+        Required columns: {", ".join(INSPECTION_EXCEL_REQUIRED_COLUMNS)}.
+
+        Validation checks dates, strings, blade numbers in this wind farm, photo
+        paths, numeric ranges, and allowed enum values. Radial position must be
+        `>= 0` and `< {float(farm.blade_length):g} m`; orientation must be between
+        `0` and `360` degrees; density must be an integer from `0` to `100`.
+        """
+    )
+
+    with st.expander("Allowed classification values"):
+        st.markdown(
+            "**Severity:** " + ", ".join(severity.value for severity in SeverityType)
+        )
+        st.markdown("**Type:** " + ", ".join(damage_type.value for damage_type in DamageType))
+        st.markdown("**Depth:** " + ", ".join(depth.value for depth in DepthType))
+        st.markdown(
+            "**Cross-section position:** "
+            + ", ".join(cs_position.value for cs_position in CSPosition)
+        )
+
+    uploaded_file = st.file_uploader(
+        "Upload inspection Excel file",
+        type=["xlsx", "xls"],
+        key=f"add_inspection_excel_upload_{farm.id}",
+    )
+    if uploaded_file is not None:
+        st.info(f"Selected file: {uploaded_file.name}")
+
+    submit_col, cancel_col = st.columns(2)
+    if submit_col.button(
+        "Submit",
+        type="primary",
+        width="stretch",
+        disabled=uploaded_file is None,
+    ):
+        damage_records, errors = validate_inspection_excel_upload(
+            session,
+            uploaded_file,
+            farm,
+        )
+        if errors:
+            for error in errors:
+                st.error(error)
+        else:
+            try:
+                next_damage_id = int(session.scalar(select(func.max(Damage.damage_id))) or 0) + 1
+                damages = []
+                for offset, record in enumerate(damage_records):
+                    damages.append(
+                        Damage(
+                            damage_id=next_damage_id + offset,
+                            blade_id=record["blade_id"],
+                            inspection_date=record["inspection_date"],
+                            inspector_name=record["inspector_name"],
+                            severity=record["severity"],
+                            damage_type=record["damage_type"],
+                            depth=record["depth"],
+                            cs_position=record["cs_position"],
+                            radial_position=record["radial_position"],
+                            radial_area_size=record["radial_area_size"],
+                            size=record["size"],
+                            density=record["density"],
+                            orientation=record["orientation"],
+                            photo=record["photo"],
+                            inspection_comment=record["inspection_comment"],
+                            analyzer_comment=record["analyzer_comment"],
+                        )
+                    )
+
+                session.add_all(damages)
+                session.commit()
+                st.session_state.pop("add_inspection_data_wind_farm_id", None)
+                st.session_state.turbine_success_message = (
+                    f"Added {len(damages)} inspection damage record(s) from {uploaded_file.name}"
+                )
+                st.rerun()
+            except IntegrityError:
+                session.rollback()
+                st.error("Could not add inspection data because a damage ID already exists.")
+            except SQLAlchemyError as exc:
+                session.rollback()
+                st.error(f"Could not add inspection data: {exc}")
+
+    if cancel_col.button("Cancel", width="stretch"):
+        st.session_state.pop("add_inspection_data_wind_farm_id", None)
+        st.rerun()
+
+
 @st.dialog(
     "Add turbine(s)",
     width="medium",
@@ -2828,6 +3342,7 @@ def show_turbines_page(session: Session) -> None:
         if st.button("Add Turbine(s)", key="add_turbines_button"):
             st.session_state.add_turbines_wind_farm_id = farm.id
             st.session_state.pop("remove_turbine_wind_farm_id", None)
+            st.session_state.pop("add_inspection_data_wind_farm_id", None)
         if st.button(
             "Remove Turbine",
             key="remove_turbine_button",
@@ -2835,11 +3350,15 @@ def show_turbines_page(session: Session) -> None:
         ):
             st.session_state.remove_turbine_wind_farm_id = farm.id
             st.session_state.pop("add_turbines_wind_farm_id", None)
+            st.session_state.pop("add_inspection_data_wind_farm_id", None)
         st.markdown(
             "<div style='border-left: 1px solid rgba(49, 51, 63, 0.25); height: 2.4rem;'></div>",
             unsafe_allow_html=True,
         )
-        st.button("Add Inspection Data", key="add_inspection_data_button")
+        if st.button("Add Inspection Data", key="add_inspection_data_button"):
+            st.session_state.add_inspection_data_wind_farm_id = farm.id
+            st.session_state.pop("add_turbines_wind_farm_id", None)
+            st.session_state.pop("remove_turbine_wind_farm_id", None)
 
     st.divider()
 
@@ -2855,6 +3374,8 @@ def show_turbines_page(session: Session) -> None:
         add_turbines_dialog(session)
     if st.session_state.get("remove_turbine_wind_farm_id") == farm.id:
         remove_turbine_dialog(session)
+    if st.session_state.get("add_inspection_data_wind_farm_id") == farm.id:
+        add_inspection_data_dialog(session)
 
     if turbines_df.empty:
         st.info("No turbines are defined for this wind farm yet.")
